@@ -73,10 +73,20 @@ export function spellingPrompt(word) {
   return `Spell ${String(word ?? "").trim()}`;
 }
 
+export function sentenceFeedback(sentence, word) {
+  if (!sentenceUsesWord(sentence, word)) return `Use the word ${word} somewhere in your sentence.`;
+  const words = String(sentence).toLowerCase().match(/[a-z]+(?:'[a-z]+)?/g) ?? [];
+  if (new Set(words).size < 2) return "Add more words to tell a complete thought. Use more than just the red word.";
+  if (!/[.!?][\"'”’]?\s*$/.test(sentence)) return "Finish your sentence with a period, question mark, or exclamation point.";
+  return "";
+}
+
 export function parseSpokenLetters(transcript, word) {
   const clean = String(transcript ?? "").toLocaleLowerCase("en-US").trim();
   const target = normalizeSpelling(word);
-  const spokenWord = clean.replace(/[^a-z]/g, "");
+  // Only a single spoken word may use a homophone alias. Keep spelled
+  // sequences such as H-E-A-R literal so a wrong spelling is not corrected.
+  const spokenWord = clean.replace(/[.!?,]+$/, "");
   const spokenAliases = {
     air: ["heir"],
     here: ["hear"],

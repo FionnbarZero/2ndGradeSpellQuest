@@ -10,9 +10,8 @@ import {
   isCorrectSpelling,
   matchSpokenSpelling,
   normalizeSpelling,
-  parseSpokenLetters,
   selectPreferredVoice,
-  sentenceUsesWord,
+  sentenceFeedback,
   shuffledLetters,
   spellingPrompt,
 } from "./engine.js";
@@ -35,6 +34,7 @@ let recognition = null;
 let muted = localStorage.getItem(SOUND_KEY) === "muted";
 let preferredVoice = null;
 let magicAudioContext = null;
+const pendingPrompts = new Set();
 
 function refreshPreferredVoice() {
   if (!("speechSynthesis" in window)) return;
@@ -71,7 +71,8 @@ soundButton.addEventListener("click", () => {
 });
 
 reportButton.addEventListener("click", () => {
-  stopActivity();
+  stopRecognition();
+  stopSpeech();
   reportStatus.textContent = "";
   problemDialog.showModal();
   window.setTimeout(() => problemDetails.focus(), 0);
@@ -327,7 +328,7 @@ function renderTeachingTask() {
   if (isTileLevel) bindTileActivity(task, voiceSupported);
   else bindTypingActivity();
   focusMain();
-  if (shouldAnnounce && !muted) window.setTimeout(() => speakWord(task.word), 350);
+  if (shouldAnnounce && !muted) schedulePrompt(() => speakWord(task.word), 350);
 }
 
 function renderMemoryPreview() {
@@ -352,6 +353,7 @@ function renderMemoryPreview() {
   };
   app.querySelector("#ready-now").addEventListener("click", finish);
   activeTimer = window.setInterval(() => {
+    if (problemDialog.open) return;
     seconds -= 1;
     const countdown = app.querySelector("#countdown span");
     if (countdown) countdown.textContent = String(Math.max(0, seconds));
@@ -602,6 +604,7 @@ function renderCorrection(firstError) {
     </section>
   `;
   activeTimer = window.setInterval(() => {
+    if (problemDialog.open) return;
     seconds -= 1;
     const counter = app.querySelector("#countdown span");
     if (counter) counter.textContent = String(Math.max(0, seconds));
@@ -647,7 +650,7 @@ function renderSentencePractice(feedback = "") {
           ${
             isSpelling
               ? "Look at the red word, then type it carefully."
-              : "Write a sentence of your own. Make sure the red word appears in it."
+              : "Write a complete thought using the red word and other words. End with a period, question mark, or exclamation point."
           }
         </p>
         ${isSpelling ? renderListenButtons(word, false) : ""}
@@ -687,8 +690,9 @@ function renderSentencePractice(feedback = "") {
       return;
     }
 
-    if (!sentenceUsesWord(answer, word)) {
-      app.querySelector("#sentence-feedback").textContent = `Use the word ${word} somewhere in your sentence.`;
+    const feedback = sentenceFeedback(answer, word);
+    if (feedback) {
+      app.querySelector("#sentence-feedback").textContent = feedback;
       input.focus();
       return;
     }
@@ -701,7 +705,7 @@ function renderSentencePractice(feedback = "") {
     renderSentencePractice();
   });
   if (isSpelling) bindLetterEcho(input);
-  window.setTimeout(() => {
+  schedulePrompt(() => {
     if (isSpelling) speakWord(word);
     input.focus();
   }, 250);
@@ -761,7 +765,7 @@ function renderTestWord() {
     renderTestWord();
   });
   bindLetterEcho(input);
-  window.setTimeout(() => {
+  schedulePrompt(() => {
     speakWord(word);
     input.focus();
   }, 300);
@@ -958,9 +962,9 @@ function renderListenButtons(word, includeSentence = true) {
 }
 
 function bindListenButtons(word, includeSentence = true) {
-  app.querySelector("[data-speak-word]")?.addEventListener("click", () => speakWord(word));
+  app.querySelector("[data-speak-word]")?.addEventListener("click", () => speakWord(word, true));
   if (includeSentence) {
-    app.querySelector("[data-speak-sentence]")?.addEventListener("click", () => speakSentence(word));
+    app.querySelector("[data-speak-sentence]")?.addEventListener("click", () => speakSentence(word, true));
   }
 }
 
@@ -1039,6 +1043,7 @@ function levelInstruction(level, fallback) {
 
 function startVoiceLetters() {
   stopRecognition();
+  stopSpeech();
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!Recognition) {
     session.voiceFallback = true;
@@ -1133,29 +1138,30 @@ function addSpokenLetter(letter) {
   return true;
 }
 
-function speakWord(word) {
+function speakWord(word, requested = false) {
   const example = WORD_DETAILS[word]?.sentence;
   const prompt = example ? `${spellingPrompt(word)}. ${example} The word is ${word}.` : `${spellingPrompt(word)}. ${word}.`;
-  speak(prompt, 0.8);
+  speak(prompt, 0.8, requested);
 }
 
-function speakSentence(word) {
+function speakSentence(word, requested = false) {
   const detail = WORD_DETAILS[word];
-  if (detail) speak(detail.sentence, 0.86);
+  if (detail) speak(detail.sentence, 0.86, requested);
 }
 
-function speak(text, rate = 0.9) {
-  if (muted || !("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  queueSpeech(text, rate);
+function speak(text, rate = 0.9, requested = false) {
+  if ((muted && !requested) || !("speechSynthesis" in window)) return;
+  if (requested) stopRecognition();
+  stopSpeech();
+  queueSpeech(text, rate, requested);
 }
 
 function speakLetterSequence(letters) {
   for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), 0.76);
 }
 
-function queueSpeech(text, rate = 0.9) {
-  if (muted || !("speechSynthesis" in window)) return;
+function queueSpeech(text, rate = 0.9, requested = false) {
+  if ((muted && !requested) || recognition || problemDialog.open || !("speechSynthesis" in window)) return;
   if (!preferredVoice) refreshPreferredVoice();
   const utterance = new SpeechSynthesisUtterance(text);
   if (preferredVoice) utterance.voice = preferredVoice;
@@ -1217,6 +1223,20 @@ function playSpellSparkSound() {
 function stopActivity() {
   stopTimer();
   stopRecognition();
+  stopSpeech();
+}
+
+function schedulePrompt(callback, delay) {
+  const timer = window.setTimeout(() => {
+    pendingPrompts.delete(timer);
+    if (!problemDialog.open && !recognition) callback();
+  }, delay);
+  pendingPrompts.add(timer);
+}
+
+function stopSpeech() {
+  pendingPrompts.forEach((timer) => window.clearTimeout(timer));
+  pendingPrompts.clear();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
 }
 

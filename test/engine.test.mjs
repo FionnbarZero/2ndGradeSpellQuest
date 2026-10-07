@@ -14,6 +14,7 @@ import {
   normalizeSpelling,
   parseSpokenLetters,
   selectPreferredVoice,
+  sentenceFeedback,
   sentenceUsesWord,
   shuffledLetters,
   spellingPrompt,
@@ -48,6 +49,24 @@ test("requires a complete spoken spelling before moving any tiles", () => {
     transcript: "air",
     letters: ["a", "i", "r"],
   });
+});
+
+test("keeps spelled homophones literal instead of rewriting incorrect spelling", () => {
+  for (const transcript of ["H E A R", "H-E-A-R", "H, E, A, R", "H.E.A.R."]) {
+    assert.deepEqual(parseSpokenLetters(transcript, "here"), [..."hear"]);
+    assert.equal(matchSpokenSpelling([transcript], "here"), null);
+  }
+  assert.equal(matchSpokenSpelling(["H E R E"], "here").letters.join(""), "here");
+  assert.equal(matchSpokenSpelling(["hear."], "here").letters.join(""), "here");
+  assert.equal(matchSpokenSpelling(["H E I R"], "air"), null);
+});
+
+test("sentence practice requires more than the target word and ending punctuation", () => {
+  for (const answer of ["air", "air.", "air air.", "The chair is blue.", "The air is cool"]) {
+    assert.notEqual(sentenceFeedback(answer, "air"), "");
+  }
+  assert.equal(sentenceFeedback("The air is cool.", "air"), "");
+  assert.equal(sentenceFeedback("Come here!", "here"), "");
 });
 
 test("never presents the current spelling target in order", () => {
