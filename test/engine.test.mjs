@@ -10,10 +10,12 @@ import {
   createThursdayReteachStages,
   formatSpellSparks,
   isCorrectSpelling,
+  matchSpokenSpelling,
   normalizeSpelling,
   parseSpokenLetters,
   selectPreferredVoice,
   sentenceUsesWord,
+  shuffledLetters,
   spellingPrompt,
 } from "../dist/engine.js";
 import { CURRENT_WEEK } from "../dist/curriculum.js";
@@ -33,6 +35,28 @@ test("accepts a whole word or individually spoken letter names", () => {
   assert.deepEqual(parseSpokenLetters("air", "air"), ["a", "i", "r"]);
   assert.deepEqual(parseSpokenLetters("A, eye, are", "air"), ["a", "i", "r"]);
   assert.deepEqual(parseSpokenLetters("double e", "see"), ["e", "e"]);
+});
+
+test("accepts common speech-recognition homophones for the current red words", () => {
+  assert.deepEqual(parseSpokenLetters("heir", "air"), ["a", "i", "r"]);
+  assert.deepEqual(parseSpokenLetters("hear", "here"), ["h", "e", "r", "e"]);
+});
+
+test("requires a complete spoken spelling before moving any tiles", () => {
+  assert.equal(matchSpokenSpelling(["eye"], "air"), null);
+  assert.deepEqual(matchSpokenSpelling(["eye", "air"], "air"), {
+    transcript: "air",
+    letters: ["a", "i", "r"],
+  });
+});
+
+test("never presents the current spelling target in order", () => {
+  const fixedRandomValues = [0, 0.5, 0.999999];
+  for (const word of CURRENT_WEEK.spellingTargets) {
+    for (const value of fixedRandomValues) {
+      assert.notEqual(shuffledLetters(word, () => value).join(""), word);
+    }
+  }
 });
 
 test("recognizes the target word as a complete word in a sentence", () => {

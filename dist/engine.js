@@ -44,7 +44,7 @@ export const LEVEL_NAMES = {
   1: "Build with a guide",
   2: "Remember and build",
   3: "Build it yourself",
-  4: "Speak the letters",
+  4: "Say or spell it",
   5: "Write the spell",
 };
 
@@ -75,7 +75,13 @@ export function spellingPrompt(word) {
 
 export function parseSpokenLetters(transcript, word) {
   const clean = String(transcript ?? "").toLocaleLowerCase("en-US").trim();
-  if (normalizeSpelling(clean) === normalizeSpelling(word)) return [...normalizeSpelling(word)];
+  const target = normalizeSpelling(word);
+  const spokenWord = clean.replace(/[^a-z]/g, "");
+  const spokenAliases = {
+    air: ["heir"],
+    here: ["hear"],
+  };
+  if (spokenWord === target || spokenAliases[target]?.includes(spokenWord)) return [...target];
   const names = {
     a: "a", ay: "a", b: "b", bee: "b", be: "b", c: "c", see: "c", sea: "c",
     d: "d", dee: "d", e: "e", f: "f", ef: "f", g: "g", gee: "g", h: "h", aitch: "h",
@@ -97,6 +103,15 @@ export function parseSpokenLetters(transcript, word) {
     }
   }
   return result;
+}
+
+export function matchSpokenSpelling(alternatives = [], word) {
+  const target = normalizeSpelling(word);
+  for (const transcript of alternatives) {
+    const letters = parseSpokenLetters(transcript, word);
+    if (letters.join("") === target) return { transcript: String(transcript ?? ""), letters };
+  }
+  return null;
 }
 
 export function formatSpellSparks(count) {

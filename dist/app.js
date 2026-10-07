@@ -8,6 +8,7 @@ import {
   createThursdayReteachStages,
   formatSpellSparks,
   isCorrectSpelling,
+  matchSpokenSpelling,
   normalizeSpelling,
   parseSpokenLetters,
   selectPreferredVoice,
@@ -375,7 +376,7 @@ function renderTileActivity(task, voiceSupported) {
     session.voiceStatus ||
     (session.voiceFallback
       ? "Letter tiles are ready. You can try the microphone again at any time."
-      : "Tap the microphone, then say each letter in order, like A, I, R.");
+      : "Tap the microphone, then say the word or spell each letter, like A, I, R.");
   const available = session.letterTiles
     .map(
       (tile) => `
@@ -396,7 +397,7 @@ function renderTileActivity(task, voiceSupported) {
           <div class="voice-controls">
             <button class="mic-button" id="mic-button" type="button" ${voiceSupported ? "" : "disabled"}>
               <span aria-hidden="true">🎙</span>
-              <span>${voiceSupported ? (session.voiceFallback ? "Try microphone again" : "Speak letters") : "Voice unavailable"}</span>
+              <span>${voiceSupported ? (session.voiceFallback ? "Try microphone again" : "Say word or letters") : "Voice unavailable"}</span>
             </button>
             <p id="heard-text">${escapeHtml(voiceStatus)}</p>
             ${voiceSupported && !session.voiceFallback ? '<button class="text-button" id="voice-fallback" type="button">Use letter tiles instead</button>' : ""}
@@ -1030,7 +1031,7 @@ function levelInstruction(level, fallback) {
     1: "Use the model to put the letters in order.",
     2: "Build the word you just studied.",
     3: "Listen, then arrange the letters without a model.",
-    4: fallback ? "Voice input is unavailable, so use the letter tiles." : "Tap the microphone and say each letter in order.",
+    4: fallback ? "Voice input is unavailable, so use the letter tiles." : "Tap the microphone, then say the word or spell each letter in order.",
     5: "Listen, then type the whole word from memory.",
   };
   return instructions[level];
@@ -1050,32 +1051,33 @@ function startVoiceLetters() {
   recognition.lang = "en-US";
   recognition.interimResults = false;
   recognition.continuous = false;
-  recognition.maxAlternatives = 5;
+  recognition.maxAlternatives = 10;
   const activeRecognition = recognition;
   const button = app.querySelector("#mic-button");
   const heard = app.querySelector("#heard-text");
   if (button) button.classList.add("listening");
-  if (heard) heard.textContent = "Listening… say each letter in order, like A, I, R.";
+  if (heard) heard.textContent = "Listening… say the word, or spell each letter like A, I, R.";
 
   recognition.onstart = () => {
-    if (heard) heard.textContent = "Listening… say each letter in order, like A, I, R.";
+    if (heard) heard.textContent = "Listening… say the word, or spell each letter like A, I, R.";
   };
 
   recognition.onresult = (event) => {
     const alternatives = Array.from(event.results[0], (result) => result.transcript);
-    const target = normalizeSpelling(session.currentTask.word);
-    const best =
-      alternatives
-        .map((transcript) => ({ transcript, letters: parseSpokenLetters(transcript, session.currentTask.word) }))
-        .find(({ letters }) => letters.join("") === target) ??
-      { transcript: alternatives[0] ?? "", letters: parseSpokenLetters(alternatives[0] ?? "", session.currentTask.word) };
-    const { transcript, letters } = best;
-    const movedLetters = letters.filter(addSpokenLetter);
-    session.voiceStatus = movedLetters.length
-      ? `I heard: “${transcript}”. ${session.builtTileIds.length === target.length ? "All letters are in place." : "Keep going."}`
-      : `I heard: “${transcript}”. Try saying one letter at a time.`;
+    const match = matchSpokenSpelling(alternatives, session.currentTask.word);
+    if (match) {
+      session.letterTiles.forEach((tile) => {
+        tile.used = false;
+      });
+      session.builtTileIds = [];
+      match.letters.forEach(addSpokenLetter);
+      session.voiceStatus = `I heard: “${match.transcript}”. All letters are in place.`;
+    } else {
+      const transcript = alternatives[0] ?? "";
+      session.voiceStatus = `I heard: “${transcript}”. I did not get the whole word, so no tiles were moved. Try the word slowly or spell each letter.`;
+    }
     renderTeachingTask();
-    speakLetterSequence(movedLetters);
+    if (match) speakLetterSequence(match.letters);
   };
 
   recognition.onnomatch = () => {
