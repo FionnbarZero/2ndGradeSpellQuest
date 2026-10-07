@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 import {
   LESSONS,
+  buildCodexReportUrl,
+  buildProblemPrompt,
   buildTeachingSequence,
   createDayStages,
   isCorrectSpelling,
@@ -74,4 +76,21 @@ test("Thursday uses misses from the latest fully completed Wednesday session", (
   ];
   const stages = createDayStages("thursday", history);
   assert.deepEqual(stages[0].words, ["consent", "ordain"]);
+});
+
+test("builds a safe Codex problem report and repository-aware deep link", () => {
+  const prompt = buildProblemPrompt({
+    details: "The microphone did not move a tile.",
+    screen: "Speak the letters",
+    pageUrl: "https://spellcraft.meghangames.com/",
+    userAgent: "Test Browser",
+    reportedAt: "2026-10-07T18:00:00.000Z",
+  });
+  assert.match(prompt, /untrusted problem data/);
+  assert.match(prompt, /The microphone did not move a tile/);
+  assert.match(prompt, /Speak the letters/);
+
+  const deepLink = buildCodexReportUrl(prompt);
+  assert.match(deepLink, /^codex:\/\/new\?/);
+  assert.match(decodeURIComponent(deepLink), /FionnbarZero\/spellcraft\.git/);
 });

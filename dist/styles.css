@@ -69,6 +69,12 @@ button:focus-visible, input:focus-visible {
   justify-content: space-between;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .brand,
 .quiet-button,
 .text-button,
@@ -107,6 +113,87 @@ button:focus-visible, input:focus-visible {
   color: var(--muted);
   background: rgba(255,255,255,.04);
 }
+
+.report-button { color: var(--gold-pale); }
+
+.problem-dialog {
+  width: min(590px, calc(100% - 28px));
+  max-height: calc(100vh - 40px);
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 24px;
+  color: var(--ink);
+  background: var(--card-strong);
+  box-shadow: var(--shadow);
+  overflow: auto;
+}
+
+.problem-dialog::backdrop {
+  background: rgba(5, 3, 18, .78);
+  backdrop-filter: blur(6px);
+}
+
+.problem-form {
+  position: relative;
+  padding: clamp(26px, 6vw, 44px);
+}
+
+.problem-form h2 {
+  margin: 0;
+  font-family: "Fraunces", Georgia, serif;
+  font-size: clamp(2rem, 6vw, 3rem);
+}
+
+.dialog-intro {
+  margin: 14px 0 24px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.problem-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.problem-form textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 14px 16px;
+  border: 2px solid rgba(255,255,255,.14);
+  border-radius: 13px;
+  color: var(--ink);
+  background: rgba(7,4,22,.38);
+  line-height: 1.5;
+}
+
+.problem-form textarea:focus { border-color: var(--mint); }
+
+.dialog-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 50%;
+  color: var(--muted);
+  background: rgba(255,255,255,.05);
+  font-size: 1.45rem;
+  cursor: pointer;
+}
+
+.privacy-note {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
+.privacy-note span { color: var(--mint); }
+.report-status { min-height: 23px; margin: 12px 0 0; color: var(--mint); font-size: .84rem; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 
 #app {
   width: min(1120px, calc(100% - 32px));
@@ -392,8 +479,10 @@ footer {
 
 @media (max-width: 560px) {
   .site-header { padding: 15px 0; }
-  .quiet-button { font-size: 0; }
-  .quiet-button span { font-size: 1rem; }
+  .quiet-button:not(.report-button) { font-size: 0; }
+  .quiet-button:not(.report-button) span { font-size: 1rem; }
+  .report-button { font-size: .75rem; }
+  .report-button span { display: none; }
   .home-shell { padding-top: 28px; }
   .day-grid { grid-template-columns: 1fr; }
   .day-card { min-height: 145px; }
@@ -404,6 +493,7 @@ footer {
   .letter-tile, .answer-tile { width: 34px; height: 44px; border-radius: 8px; }
   .answer-row, .tile-bank { gap: 5px; }
   .graph-legend { flex-direction: column; }
+  .dialog-actions { align-items: stretch; flex-direction: column-reverse; }
 }
 
 @media (prefers-reduced-motion: reduce) {

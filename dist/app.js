@@ -2,6 +2,8 @@ import {
   LEVEL_NAMES,
   LESSONS,
   WORD_DETAILS,
+  buildCodexReportUrl,
+  buildProblemPrompt,
   createDayStages,
   isCorrectSpelling,
   normalizeSpelling,
@@ -13,6 +15,11 @@ const SOUND_KEY = "spellcraft-sound-v1";
 const app = document.querySelector("#app");
 const homeButton = document.querySelector("#home-button");
 const soundButton = document.querySelector("#sound-button");
+const reportButton = document.querySelector("#report-problem-button");
+const problemDialog = document.querySelector("#problem-dialog");
+const problemForm = document.querySelector("#problem-form");
+const problemDetails = document.querySelector("#problem-details");
+const reportStatus = document.querySelector("#report-status");
 
 let session = null;
 let activeTimer = null;
@@ -39,9 +46,64 @@ soundButton.addEventListener("click", () => {
   if (muted && "speechSynthesis" in window) window.speechSynthesis.cancel();
 });
 
+reportButton.addEventListener("click", () => {
+  stopActivity();
+  reportStatus.textContent = "";
+  problemDialog.showModal();
+  window.setTimeout(() => problemDetails.focus(), 0);
+});
+
+document.querySelector("#problem-close").addEventListener("click", () => problemDialog.close());
+
+problemDialog.addEventListener("click", (event) => {
+  if (event.target === problemDialog) problemDialog.close();
+});
+
+problemForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!problemDetails.reportValidity()) return;
+  const report = createCurrentProblemReport();
+  problemDialog.close();
+  window.location.href = buildCodexReportUrl(report);
+});
+
+document.querySelector("#copy-report").addEventListener("click", async () => {
+  if (!problemDetails.reportValidity()) return;
+  const copied = await copyText(createCurrentProblemReport());
+  reportStatus.textContent = copied ? "Report copied. Paste it into a Codex chat and send it." : "Couldn’t copy automatically. Select the description and copy it manually.";
+});
+
 function updateSoundButton() {
   soundButton.innerHTML = `<span aria-hidden="true">${muted ? "🔇" : "🔊"}</span> Sound ${muted ? "off" : "on"}`;
   soundButton.setAttribute("aria-pressed", String(muted));
+}
+
+function createCurrentProblemReport() {
+  return buildProblemPrompt({
+    details: problemDetails.value,
+    screen: app.querySelector("h1")?.textContent?.trim() || "SpellCraft",
+    pageUrl: window.location.href,
+    userAgent: navigator.userAgent,
+    reportedAt: new Date().toISOString(),
+  });
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    const copied = document.execCommand("copy");
+    field.remove();
+    return copied;
+  }
 }
 
 function getHistory() {

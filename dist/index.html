@@ -16,12 +16,34 @@
         <span class="brand-mark" aria-hidden="true">✦</span>
         <span>SpellCraft</span>
       </button>
-      <button class="quiet-button" id="sound-button" type="button" aria-pressed="false">
-        <span aria-hidden="true">🔊</span> Sound on
-      </button>
+      <div class="header-actions">
+        <button class="quiet-button report-button" id="report-problem-button" type="button">
+          <span aria-hidden="true">⚑</span> Report a problem
+        </button>
+        <button class="quiet-button" id="sound-button" type="button" aria-pressed="false">
+          <span aria-hidden="true">🔊</span> Sound on
+        </button>
+      </div>
     </header>
 
     <main id="app" tabindex="-1"></main>
+
+    <dialog class="problem-dialog" id="problem-dialog" aria-labelledby="problem-dialog-title">
+      <form class="problem-form" id="problem-form" method="dialog">
+        <button class="dialog-close" id="problem-close" type="button" aria-label="Close problem report">×</button>
+        <p class="eyebrow">Help improve SpellCraft</p>
+        <h2 id="problem-dialog-title">Report a problem</h2>
+        <p class="dialog-intro">Tell Codex what went wrong. A new Codex chat will open with your report ready for you to review and send.</p>
+        <label for="problem-details">What happened?</label>
+        <textarea id="problem-details" maxlength="1200" required placeholder="For example: I clicked the microphone, but no letters moved."></textarea>
+        <p class="privacy-note"><span aria-hidden="true">◇</span> The report includes this screen and page address. It does not include saved scores, names, or spelling answers.</p>
+        <p class="report-status" id="report-status" aria-live="polite"></p>
+        <div class="dialog-actions">
+          <button class="secondary-button" id="copy-report" type="button">Copy report</button>
+          <button class="primary-button" type="submit">Open in Codex <span aria-hidden="true">→</span></button>
+        </div>
+      </form>
+    </dialog>
 
     <footer>
       Progress stays on this device.
