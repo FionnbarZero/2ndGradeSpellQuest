@@ -5,6 +5,7 @@ import {
   buildCodexReportUrl,
   buildProblemPrompt,
   createDayStages,
+  formatSpellSparks,
   isCorrectSpelling,
   normalizeSpelling,
   selectPreferredVoice,
@@ -264,6 +265,8 @@ function renderStageIntro() {
 
 function startTeaching(stage) {
   stage.runtimeTasks = stage.tasks.map((task) => ({ ...task }));
+  stage.sparksCollected = 0;
+  stage.sparksUsed = 0;
   session.taskIndex = 0;
   loadTeachingTask();
 }
@@ -272,7 +275,7 @@ function loadTeachingTask() {
   stopActivity();
   const stage = currentStage();
   if (session.taskIndex >= stage.runtimeTasks.length) {
-    advanceStage();
+    renderSparkReward();
     return;
   }
   session.currentTask = stage.runtimeTasks[session.taskIndex];
@@ -487,6 +490,7 @@ function checkTeachingAnswer(answer) {
   stopActivity();
   const task = session.currentTask;
   if (isCorrectSpelling(answer, task.word)) {
+    currentStage().sparksCollected += 1;
     task.errorsAtLevel = 0;
     const isClimbingBack = task.level < task.targetLevel;
     if (isClimbingBack) task.level += 1;
@@ -513,6 +517,11 @@ function renderSuccess(isClimbingBack) {
         <p class="eyebrow">${task.isReview ? "Memory strengthened" : "Spell complete"}</p>
         <h1>${escapeHtml(task.word)}</h1>
         <p>${isClimbingBack ? `Well done. Now return to ${LEVEL_NAMES[task.level].toLowerCase()}.` : successMessage()}</p>
+        <div class="spark-earned" role="status">
+          <span aria-hidden="true">✦</span>
+          <strong>+1 Spell Spark</strong>
+          <small>${formatSpellSparks(currentStage().sparksCollected)} collected</small>
+        </div>
         <button class="primary-button" id="continue-learning" type="button">Continue <span aria-hidden="true">→</span></button>
       </article>
     </section>
@@ -527,6 +536,48 @@ function renderSuccess(isClimbingBack) {
     } else {
       loadTeachingTask();
     }
+  });
+  focusMain();
+}
+
+function renderSparkReward(charged = false) {
+  stopActivity();
+  const stage = currentStage();
+  const sparkCount = charged ? stage.sparksUsed : stage.sparksCollected;
+  const sparkLabel = formatSpellSparks(sparkCount);
+
+  app.innerHTML = `
+    <section class="center-shell">
+      ${renderDayProgress()}
+      <article class="book-card reward-card ${charged ? "reward-charged" : ""}">
+        <div class="${charged ? "charged-spellbook" : "spark-vessel"}" aria-hidden="true">
+          ${charged ? "✦" : `<span>✦</span><strong>${sparkCount}</strong>`}
+        </div>
+        <p class="eyebrow">${charged ? "Spellbook charged" : "Teaching sequence complete"}</p>
+        <h1>${charged ? "Your sparks became power" : "Use what you collected"}</h1>
+        <p class="lede compact">
+          ${
+            charged
+              ? `You turned ${sparkLabel} into a boost for the word check.`
+              : `You earned ${sparkLabel} by spelling words correctly. Use them now to charge your spellbook.`
+          }
+        </p>
+        <button class="primary-button" id="primary-action" type="button">
+          ${charged ? "Begin word check" : `Use ${sparkLabel}`} <span aria-hidden="true">→</span>
+        </button>
+      </article>
+    </section>
+  `;
+
+  if (charged) addSparkles();
+  app.querySelector("#primary-action").addEventListener("click", () => {
+    if (charged) {
+      advanceStage();
+      return;
+    }
+    stage.sparksUsed = sparkCount;
+    stage.sparksCollected = 0;
+    renderSparkReward(true);
   });
   focusMain();
 }
@@ -757,7 +808,10 @@ function renderTaskProgress() {
       <div class="gem-row" aria-label="Word ${wordIndex + 1} of ${stage.words.length}">
         ${stage.words.map((word, index) => `<span class="gem ${index < wordIndex ? "complete" : index === wordIndex ? "active" : ""}" title="${escapeHtml(word)}">◆</span>`).join("")}
       </div>
-      <span>${percent}% through this lesson</span>
+      <div class="lesson-status">
+        <span>${percent}% through this lesson</span>
+        <strong><span aria-hidden="true">✦</span> ${stage.sparksCollected}</strong>
+      </div>
     </div>
   `;
 }

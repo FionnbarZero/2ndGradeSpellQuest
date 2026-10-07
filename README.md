@@ -22,6 +22,8 @@ Each new word progresses through:
 
 Previously mastered words are interleaved at Level 5 while new words are learned. Two errors at a level move the word back one level. Test results are stored only in the current browser.
 
+Every correct teaching answer earns a visible Spell Spark. The running total stays beside the lesson progress, and the learner uses the collected sparks to charge the spellbook at the end of the teaching sequence before beginning the word check.
+
 ## Run locally
 
 ```sh

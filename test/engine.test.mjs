@@ -7,6 +7,7 @@ import {
   buildProblemPrompt,
   buildTeachingSequence,
   createDayStages,
+  formatSpellSparks,
   isCorrectSpelling,
   normalizeSpelling,
   selectPreferredVoice,
@@ -22,6 +23,12 @@ test("normalizes case and accidental spaces", () => {
 test("uses the requested spoken spelling prompt", () => {
   assert.equal(spellingPrompt("compromise"), "Spell compromise");
   assert.equal(spellingPrompt("Constitution"), "Spell Constitution");
+});
+
+test("formats the collected spell spark reward", () => {
+  assert.equal(formatSpellSparks(1), "1 spell spark");
+  assert.equal(formatSpellSparks(12), "12 spell sparks");
+  assert.equal(formatSpellSparks(-3), "0 spell sparks");
 });
 
 test("prefers Google US English and uses a natural English fallback", () => {

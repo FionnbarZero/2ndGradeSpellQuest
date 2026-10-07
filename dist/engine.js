@@ -100,6 +100,11 @@ export function spellingPrompt(word) {
   return `Spell ${String(word ?? "").trim()}`;
 }
 
+export function formatSpellSparks(count) {
+  const total = Math.max(0, Math.floor(Number(count) || 0));
+  return `${total} spell ${total === 1 ? "spark" : "sparks"}`;
+}
+
 export function selectPreferredVoice(voices = []) {
   const available = Array.from(voices);
   const name = (voice) => String(voice?.name ?? "").toLocaleLowerCase("en-US");
