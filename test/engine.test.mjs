@@ -9,12 +9,18 @@ import {
   createDayStages,
   isCorrectSpelling,
   normalizeSpelling,
+  spellingPrompt,
 } from "../dist/engine.js";
 
 test("normalizes case and accidental spaces", () => {
   assert.equal(normalizeSpelling("  Con sti tution "), "constitution");
   assert.equal(isCorrectSpelling("constitution", "Constitution"), true);
   assert.equal(isCorrectSpelling("consitution", "Constitution"), false);
+});
+
+test("uses the requested spoken spelling prompt", () => {
+  assert.equal(spellingPrompt("compromise"), "Spell compromise");
+  assert.equal(spellingPrompt("Constitution"), "Spell Constitution");
 });
 
 test("builds the agreed five-word interleaving sequence", () => {

@@ -8,6 +8,7 @@ import {
   isCorrectSpelling,
   normalizeSpelling,
   shuffledLetters,
+  spellingPrompt,
 } from "./engine.js";
 
 const HISTORY_KEY = "spellcraft-history-v1";
@@ -71,6 +72,17 @@ document.querySelector("#copy-report").addEventListener("click", async () => {
   if (!problemDetails.reportValidity()) return;
   const copied = await copyText(createCurrentProblemReport());
   reportStatus.textContent = copied ? "Report copied. Paste it into a Codex chat and send it." : "Couldn’t copy automatically. Select the description and copy it manually.";
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.repeat || problemDialog.open) return;
+  if (event.target.closest("input, textarea, select, button, a")) return;
+  const advanceButton = app.querySelector(
+    "#check-answer:not(:disabled), #continue-learning, #primary-action, #result-action, #ready-now",
+  );
+  if (!advanceButton) return;
+  event.preventDefault();
+  advanceButton.click();
 });
 
 function updateSoundButton() {
@@ -306,7 +318,7 @@ function renderTeachingTask() {
   if (isTileLevel) bindTileActivity(task, voiceSupported);
   else bindTypingActivity();
   focusMain();
-  if (task.level >= 3 && shouldAnnounce && !muted) window.setTimeout(() => speakWord(task.word), 350);
+  if (shouldAnnounce && !muted) window.setTimeout(() => speakWord(task.word), 350);
 }
 
 function renderMemoryPreview() {
@@ -388,8 +400,10 @@ function renderTileActivity(task, voiceSupported) {
 function bindTileActivity(task, voiceSupported) {
   app.querySelectorAll("[data-add-tile]").forEach((button) => {
     button.addEventListener("click", () => {
+      const letter = session.letterTiles.find((tile) => tile.id === button.dataset.addTile)?.letter;
       addTile(button.dataset.addTile);
       renderTeachingTask();
+      if (letter) speakLetterSequence([letter]);
     });
   });
   app.querySelectorAll("[data-remove-tile]").forEach((button) => {
@@ -430,7 +444,17 @@ function bindTypingActivity() {
     event.preventDefault();
     if (input.value.trim()) checkTeachingAnswer(input.value);
   });
+  bindLetterEcho(input);
   window.setTimeout(() => input.focus(), 50);
+}
+
+function bindLetterEcho(input) {
+  input.addEventListener("input", (event) => {
+    const letters = [...(event.data || "")]
+      .map((letter) => letter.toLocaleLowerCase("en-US"))
+      .filter((letter) => /^[a-z]$/.test(letter));
+    if (letters.length) speakLetterSequence(letters);
+  });
 }
 
 function addTile(id) {
@@ -562,6 +586,7 @@ function renderTestWord() {
     session.test.index += 1;
     renderTestWord();
   });
+  bindLetterEcho(input);
   window.setTimeout(() => {
     speakWord(word);
     input.focus();
@@ -842,8 +867,11 @@ function startVoiceLetters() {
     const transcript = event.results[0][0].transcript;
     const letters = parseSpokenLetters(transcript, session.currentTask.word);
     if (heard) heard.textContent = `I heard: “${transcript}”`;
-    letters.forEach(addSpokenLetter);
-    window.setTimeout(renderTeachingTask, 550);
+    const movedLetters = letters.filter(addSpokenLetter);
+    window.setTimeout(() => {
+      renderTeachingTask();
+      speakLetterSequence(movedLetters);
+    }, 550);
   };
   recognition.onerror = () => {
     if (heard) heard.textContent = "I didn’t catch that. Tap the microphone and try again.";
@@ -881,11 +909,13 @@ function parseSpokenLetters(transcript, word) {
 
 function addSpokenLetter(letter) {
   const available = session.letterTiles.find((tile) => !tile.used && tile.letter === letter);
-  if (available) addTile(available.id);
+  if (!available) return false;
+  addTile(available.id);
+  return true;
 }
 
 function speakWord(word) {
-  speak(word, 0.78);
+  speak(spellingPrompt(word), 0.78);
 }
 
 function speakSentence(word) {
@@ -896,6 +926,15 @@ function speakSentence(word) {
 function speak(text, rate = 0.82) {
   if (muted || !("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
+  queueSpeech(text, rate);
+}
+
+function speakLetterSequence(letters) {
+  for (const letter of letters) queueSpeech(letter.toUpperCase(), 0.72);
+}
+
+function queueSpeech(text, rate = 0.82) {
+  if (muted || !("speechSynthesis" in window)) return;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = rate;
   utterance.pitch = 1.02;

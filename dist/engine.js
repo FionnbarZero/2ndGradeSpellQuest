@@ -96,6 +96,10 @@ export function isCorrectSpelling(answer, word) {
   return normalizeSpelling(answer) === normalizeSpelling(word);
 }
 
+export function spellingPrompt(word) {
+  return `Spell ${String(word ?? "").trim()}`;
+}
+
 export function buildTeachingSequence(words) {
   const sequence = [];
   words.forEach((word, index) => {

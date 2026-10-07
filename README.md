@@ -39,3 +39,5 @@ npm test
 The app has no runtime dependencies. Voice input uses the browser's Speech Recognition API when available and provides a clearly labeled keyboard fallback when it is not.
 
 Every screen includes a **Report a problem** button. It prepares a privacy-conscious diagnostic prompt and opens a new repository-aware Codex chat using the documented `codex://` deep-link scheme. The reporter reviews and sends the message; reports are never submitted silently. A clipboard fallback is included for devices without the Codex desktop app.
+
+Audio prompts begin with “Spell [word],” and each letter is spoken as the learner places a tile or types. On computer keyboards, Enter submits typed spelling and advances eligible instruction, feedback, and result screens.
