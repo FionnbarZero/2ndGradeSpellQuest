@@ -122,11 +122,11 @@ export function selectPreferredVoice(voices = []) {
   ];
 
   return (
+    find((voice) => name(voice) === "google us english") ??
+    find((voice) => name(voice).includes("google") && isUsEnglish(voice)) ??
+    find((voice) => name(voice).includes("google") && language(voice).startsWith("en")) ??
     naturalVoiceNames.map((preferredName) => find((voice) => isUsEnglish(voice) && name(voice).includes(preferredName))).find(Boolean) ??
     find((voice) => isUsEnglish(voice) && /(premium|enhanced|natural)/i.test(String(voice?.name ?? ""))) ??
-    find((voice) => name(voice) === "google us english") ??
-    find((voice) => name(voice).includes("google") && language(voice).startsWith("en-us")) ??
-    find((voice) => name(voice).includes("google") && language(voice).startsWith("en")) ??
     find((voice) => isUsEnglish(voice)) ??
     find((voice) => language(voice).startsWith("en")) ??
     null

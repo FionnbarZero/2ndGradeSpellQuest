@@ -1132,12 +1132,14 @@ function addSpokenLetter(letter) {
 }
 
 function speakWord(word) {
-  speak(spellingPrompt(word), 0.9);
+  const example = WORD_DETAILS[word]?.sentence;
+  const prompt = example ? `${spellingPrompt(word)}. ${example} The word is ${word}.` : `${spellingPrompt(word)}. ${word}.`;
+  speak(prompt, 0.8);
 }
 
 function speakSentence(word) {
   const detail = WORD_DETAILS[word];
-  if (detail) speak(detail.sentence, 0.92);
+  if (detail) speak(detail.sentence, 0.86);
 }
 
 function speak(text, rate = 0.9) {
@@ -1147,16 +1149,18 @@ function speak(text, rate = 0.9) {
 }
 
 function speakLetterSequence(letters) {
-  for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), 0.82);
+  for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), 0.76);
 }
 
 function queueSpeech(text, rate = 0.9) {
   if (muted || !("speechSynthesis" in window)) return;
+  if (!preferredVoice) refreshPreferredVoice();
   const utterance = new SpeechSynthesisUtterance(text);
   if (preferredVoice) utterance.voice = preferredVoice;
   utterance.lang = preferredVoice?.lang || "en-US";
   utterance.rate = rate;
   utterance.pitch = 1;
+  utterance.volume = 1;
   window.speechSynthesis.speak(utterance);
 }
 

@@ -47,18 +47,18 @@ test("formats the collected spell spark reward", () => {
   assert.equal(formatSpellSparks(-3), "0 spell sparks");
 });
 
-test("prefers a natural system voice over the generic Google voice", () => {
+test("prefers the Google US English voice when it is available", () => {
   const voices = [
     { name: "Daniel", lang: "en-GB" },
     { name: "Samantha", lang: "en-US" },
     { name: "Google US English", lang: "en-US" },
   ];
-  assert.equal(selectPreferredVoice(voices), voices[1]);
+  assert.equal(selectPreferredVoice(voices), voices[2]);
   assert.equal(selectPreferredVoice(voices.slice(0, 2)), voices[1]);
   assert.equal(selectPreferredVoice([]), null);
 });
 
-test("prefers a premium US voice when one is installed", () => {
+test("uses a premium US system voice when Google is unavailable", () => {
   const voices = [
     { name: "Samantha", lang: "en-US" },
     { name: "Ava (Premium)", lang: "en-US" },
