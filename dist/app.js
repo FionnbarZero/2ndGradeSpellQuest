@@ -29,6 +29,7 @@ let activeTimer = null;
 let recognition = null;
 let muted = localStorage.getItem(SOUND_KEY) === "muted";
 let preferredVoice = null;
+let magicAudioContext = null;
 
 function refreshPreferredVoice() {
   if (!("speechSynthesis" in window)) return;
@@ -57,7 +58,11 @@ soundButton.addEventListener("click", () => {
   muted = !muted;
   localStorage.setItem(SOUND_KEY, muted ? "muted" : "on");
   updateSoundButton();
-  if (muted && "speechSynthesis" in window) window.speechSynthesis.cancel();
+  if (muted) {
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    if (magicAudioContext) void magicAudioContext.close();
+    magicAudioContext = null;
+  }
 });
 
 reportButton.addEventListener("click", () => {
@@ -490,6 +495,7 @@ function checkTeachingAnswer(answer) {
   stopActivity();
   const task = session.currentTask;
   if (isCorrectSpelling(answer, task.word)) {
+    playSpellSparkSound();
     currentStage().sparksCollected += 1;
     task.errorsAtLevel = 0;
     const isClimbingBack = task.level < task.targetLevel;
@@ -1007,6 +1013,54 @@ function queueSpeech(text, rate = 0.9) {
   utterance.rate = rate;
   utterance.pitch = 1;
   window.speechSynthesis.speak(utterance);
+}
+
+function playSpellSparkSound() {
+  if (muted) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    magicAudioContext ??= new AudioContextClass();
+    if (magicAudioContext.state === "suspended") void magicAudioContext.resume();
+
+    const start = magicAudioContext.currentTime + 0.015;
+    const notes = [
+      { frequency: 523.25, delay: 0, volume: 0.08 },
+      { frequency: 659.25, delay: 0.09, volume: 0.075 },
+      { frequency: 783.99, delay: 0.18, volume: 0.07 },
+      { frequency: 1046.5, delay: 0.31, volume: 0.09 },
+    ];
+
+    for (const note of notes) {
+      const toneStart = start + note.delay;
+      const oscillator = magicAudioContext.createOscillator();
+      const shimmer = magicAudioContext.createOscillator();
+      const toneGain = magicAudioContext.createGain();
+      const shimmerGain = magicAudioContext.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(note.frequency, toneStart);
+      shimmer.type = "sine";
+      shimmer.frequency.setValueAtTime(note.frequency * 2, toneStart);
+
+      toneGain.gain.setValueAtTime(0.0001, toneStart);
+      toneGain.gain.exponentialRampToValueAtTime(note.volume, toneStart + 0.018);
+      toneGain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.42);
+      shimmerGain.gain.setValueAtTime(0.0001, toneStart);
+      shimmerGain.gain.exponentialRampToValueAtTime(note.volume * 0.22, toneStart + 0.012);
+      shimmerGain.gain.exponentialRampToValueAtTime(0.0001, toneStart + 0.24);
+
+      oscillator.connect(toneGain).connect(magicAudioContext.destination);
+      shimmer.connect(shimmerGain).connect(magicAudioContext.destination);
+      oscillator.start(toneStart);
+      shimmer.start(toneStart);
+      oscillator.stop(toneStart + 0.44);
+      shimmer.stop(toneStart + 0.26);
+    }
+  } catch {
+    // A correct answer should still advance if audio is unavailable.
+  }
 }
 
 function stopActivity() {
