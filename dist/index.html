@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#191235" />
+    <meta name="description" content="SpellCraft is a calm, guided civics vocabulary spelling tutor." />
+    <link rel="icon" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>SpellCraft</title>
+  </head>
+  <body>
+    <div class="stars" aria-hidden="true"></div>
+    <header class="site-header">
+      <button class="brand" id="home-button" type="button" aria-label="Return to day selection">
+        <span class="brand-mark" aria-hidden="true">✦</span>
+        <span>SpellCraft</span>
+      </button>
+      <button class="quiet-button" id="sound-button" type="button" aria-pressed="false">
+        <span aria-hidden="true">🔊</span> Sound on
+      </button>
+    </header>
+
+    <main id="app" tabindex="-1"></main>
+
+    <footer>
+      Progress stays on this device.
+    </footer>
+
+    <template id="sparkles-template">
+      <div class="sparkles" aria-hidden="true"><i>✦</i><i>✧</i><i>✦</i></div>
+    </template>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

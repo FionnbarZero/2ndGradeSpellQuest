@@ -1,0 +1,11 @@
+{
+  "name": "spellcraft",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A calm, fantasy-themed civic vocabulary spelling tutor.",
+  "scripts": {
+    "test": "node --test",
+    "serve": "python3 -m http.server 4173 --directory dist"
+  }
+}
