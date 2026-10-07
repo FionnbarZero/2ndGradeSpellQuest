@@ -33,9 +33,9 @@ body {
   overflow-x: hidden;
 }
 
-button, input { font: inherit; }
+button, input, textarea { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, input:focus-visible {
+button:focus-visible, input:focus-visible, textarea:focus-visible {
   outline: 3px solid var(--gold);
   outline-offset: 4px;
 }
@@ -407,6 +407,16 @@ footer {
 .mic-button { min-width: 180px; min-height: 52px; padding: 0 18px; color: var(--ink); background: linear-gradient(180deg, #886fe0, #6451b8); }
 .mic-button.listening { animation: micPulse 1s ease-in-out infinite; }
 .voice-controls p { min-height: 22px; color: var(--muted); font-size: .9rem; }
+.voice-controls .voice-environment-note {
+  max-width: 540px;
+  margin: 16px auto 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(244,175,99,.32);
+  border-radius: 12px;
+  color: var(--gold-pale);
+  background: rgba(244,175,99,.08);
+  line-height: 1.5;
+}
 
 .typing-form { width: min(490px, 100%); margin: 18px auto 0; display: grid; gap: 14px; }
 .typing-form label { color: var(--muted); font-size: .9rem; font-weight: 600; }
@@ -422,7 +432,21 @@ footer {
   font-weight: 700;
   background: rgba(7,4,22,.38);
 }
-.typing-form input:focus { border-color: var(--mint); }
+.typing-form input:focus, .typing-form textarea:focus { border-color: var(--mint); }
+.target-word { color: var(--gold-pale); white-space: nowrap; }
+.sentence-practice-card h1 { font-size: clamp(2rem, 5.5vw, 3.5rem); }
+.sentence-form textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  padding: 16px 18px;
+  border: 2px solid rgba(255,255,255,.14);
+  border-radius: 14px;
+  color: var(--ink);
+  background: rgba(7,4,22,.38);
+  font-size: clamp(1.05rem, 3vw, 1.3rem);
+  line-height: 1.55;
+}
 
 .feedback-card { max-width: 660px; }
 .feedback-card > p:not(.eyebrow) { color: var(--muted); line-height: 1.6; }

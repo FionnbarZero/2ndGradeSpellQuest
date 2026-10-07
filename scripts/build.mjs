@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 
-const requiredFiles = ["index.html", "styles.css", "app.js", "engine.js", "favicon.svg"];
+const requiredFiles = ["index.html", "styles.css", "app.js", "engine.js", "curriculum.js", "favicon.svg"];
 
 await Promise.all(requiredFiles.map((file) => access(join("dist", file), constants.R_OK)));
 
@@ -13,4 +13,4 @@ for (const asset of ["./styles.css", "./app.js", "./favicon.svg"]) {
   }
 }
 
-console.log(`SpellCraft static build is ready (${requiredFiles.length} required files verified).`);
+console.log(`2nd Grade SpellQuest static build is ready (${requiredFiles.length} required files verified).`);

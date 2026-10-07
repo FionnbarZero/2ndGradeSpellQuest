@@ -7,12 +7,16 @@ import {
   buildProblemPrompt,
   buildTeachingSequence,
   createDayStages,
+  createThursdayReteachStages,
   formatSpellSparks,
   isCorrectSpelling,
   normalizeSpelling,
+  parseSpokenLetters,
   selectPreferredVoice,
+  sentenceUsesWord,
   spellingPrompt,
 } from "../dist/engine.js";
+import { CURRENT_WEEK } from "../dist/curriculum.js";
 
 test("normalizes case and accidental spaces", () => {
   assert.equal(normalizeSpelling("  Con sti tution "), "constitution");
@@ -21,8 +25,20 @@ test("normalizes case and accidental spaces", () => {
 });
 
 test("uses the requested spoken spelling prompt", () => {
-  assert.equal(spellingPrompt("compromise"), "Spell compromise");
-  assert.equal(spellingPrompt("Constitution"), "Spell Constitution");
+  assert.equal(spellingPrompt("air"), "Spell air");
+  assert.equal(spellingPrompt("Here"), "Spell Here");
+});
+
+test("accepts a whole word or individually spoken letter names", () => {
+  assert.deepEqual(parseSpokenLetters("air", "air"), ["a", "i", "r"]);
+  assert.deepEqual(parseSpokenLetters("A, eye, are", "air"), ["a", "i", "r"]);
+  assert.deepEqual(parseSpokenLetters("double e", "see"), ["e", "e"]);
+});
+
+test("recognizes the target word as a complete word in a sentence", () => {
+  assert.equal(sentenceUsesWord("The cool air feels good.", "air"), true);
+  assert.equal(sentenceUsesWord("Here is my book!", "here"), true);
+  assert.equal(sentenceUsesWord("The chair is blue.", "air"), false);
 });
 
 test("formats the collected spell spark reward", () => {
@@ -31,15 +47,23 @@ test("formats the collected spell spark reward", () => {
   assert.equal(formatSpellSparks(-3), "0 spell sparks");
 });
 
-test("prefers Google US English and uses a natural English fallback", () => {
+test("prefers a natural system voice over the generic Google voice", () => {
   const voices = [
     { name: "Daniel", lang: "en-GB" },
     { name: "Samantha", lang: "en-US" },
     { name: "Google US English", lang: "en-US" },
   ];
-  assert.equal(selectPreferredVoice(voices), voices[2]);
+  assert.equal(selectPreferredVoice(voices), voices[1]);
   assert.equal(selectPreferredVoice(voices.slice(0, 2)), voices[1]);
   assert.equal(selectPreferredVoice([]), null);
+});
+
+test("prefers a premium US voice when one is installed", () => {
+  const voices = [
+    { name: "Samantha", lang: "en-US" },
+    { name: "Ava (Premium)", lang: "en-US" },
+  ];
+  assert.equal(selectPreferredVoice(voices), voices[1]);
 });
 
 test("builds the agreed five-word interleaving sequence", () => {
@@ -57,50 +81,47 @@ test("builds the agreed five-word interleaving sequence", () => {
   );
 });
 
-test("Tuesday starts with Monday's delayed test", () => {
-  const stages = createDayStages("tuesday");
-  assert.equal(stages[0].id, "tuesday-delayed");
-  assert.deepEqual(stages[0].words, LESSONS.monday.words);
-  assert.equal(stages[1].type, "teaching");
+test("saves the academic words for a future reading game", () => {
+  assert.deepEqual(CURRENT_WEEK.readingTargets, ["eager", "explained", "soldiers", "message", "change"]);
+  assert.deepEqual(CURRENT_WEEK.spellingTargets, ["air", "means", "years", "here"]);
 });
 
-test("Wednesday starts with ten prior words and ends with five new words", () => {
-  const stages = createDayStages("wednesday");
-  assert.equal(stages[0].words.length, 10);
-  assert.deepEqual(stages[2].words, LESSONS.wednesday.words);
-});
-
-test("Thursday combines misses from both Wednesday tests", () => {
-  const history = [
-    { testId: "wednesday-delayed", missedWords: ["consent", "federalism"] },
-    { testId: "wednesday-immediate", missedWords: ["ordain", "amendment"] },
-  ];
-  const stages = createDayStages("thursday", history);
+test("Monday teaches and checks all four red words", () => {
+  const stages = createDayStages("monday");
   assert.equal(stages[0].type, "teaching");
-  assert.deepEqual(stages[0].words, ["consent", "federalism", "ordain", "amendment"]);
-  assert.deepEqual(stages[1].words, stages[0].words);
+  assert.deepEqual(stages[0].words, CURRENT_WEEK.spellingTargets);
+  assert.equal(stages[0].tasks.length, 29);
+  assert.equal(stages[1].id, "monday-immediate");
+  assert.deepEqual(stages[1].words, CURRENT_WEEK.spellingTargets);
 });
 
-test("Thursday requires completed Wednesday tests", () => {
-  assert.equal(createDayStages("thursday", [])[0].type, "needs-wednesday");
+test("Tuesday and Wednesday use spelling plus sentence practice", () => {
+  for (const day of ["tuesday", "wednesday"]) {
+    const stages = createDayStages(day);
+    assert.equal(stages.length, 1);
+    assert.equal(stages[0].type, "sentence-practice");
+    assert.deepEqual(stages[0].words, CURRENT_WEEK.spellingTargets);
+  }
 });
 
-test("Thursday recognizes full Wednesday mastery", () => {
-  const history = [
-    { testId: "wednesday-delayed", missedWords: [] },
-    { testId: "wednesday-immediate", missedWords: [] },
-  ];
-  assert.equal(createDayStages("thursday", history)[0].type, "mastery");
+test("Thursday starts with a delayed test of all four red words", () => {
+  const stages = createDayStages("thursday");
+  assert.equal(stages.length, 1);
+  assert.equal(stages[0].id, "thursday-delayed");
+  assert.equal(stages[0].testType, "delayed");
+  assert.deepEqual(stages[0].words, CURRENT_WEEK.spellingTargets);
 });
 
-test("Thursday uses misses from the latest fully completed Wednesday session", () => {
-  const history = [
-    { sessionId: "older", testId: "wednesday-delayed", missedWords: ["consent"] },
-    { sessionId: "older", testId: "wednesday-immediate", missedWords: ["ordain"] },
-    { sessionId: "unfinished", testId: "wednesday-delayed", missedWords: ["federal"] },
-  ];
-  const stages = createDayStages("thursday", history);
-  assert.deepEqual(stages[0].words, ["consent", "ordain"]);
+test("Thursday reteaches and retests only missed words", () => {
+  const stages = createThursdayReteachStages(["means", "here", "means"]);
+  assert.equal(stages[0].type, "teaching");
+  assert.deepEqual(stages[0].words, ["means", "here"]);
+  assert.equal(stages[1].id, "thursday-retest");
+  assert.deepEqual(stages[1].words, ["means", "here"]);
+});
+
+test("Thursday skips reteaching when every word is correct", () => {
+  assert.deepEqual(createThursdayReteachStages([]), []);
 });
 
 test("builds a safe Codex problem report and repository-aware deep link", () => {
@@ -117,5 +138,5 @@ test("builds a safe Codex problem report and repository-aware deep link", () => 
 
   const deepLink = buildCodexReportUrl(prompt);
   assert.match(deepLink, /^codex:\/\/new\?/);
-  assert.match(decodeURIComponent(deepLink), /FionnbarZero\/spellcraft\.git/);
+  assert.match(decodeURIComponent(deepLink), /FionnbarZero\/2ndGradeSpellQuest\.git/);
 });

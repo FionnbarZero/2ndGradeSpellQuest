@@ -1,9 +1,9 @@
 {
-  "name": "spellcraft",
+  "name": "2nd-grade-spellquest",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "A calm, fantasy-themed civic vocabulary spelling tutor.",
+  "description": "A calm, fantasy-themed second-grade spelling and sentence-writing tutor.",
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node --test",

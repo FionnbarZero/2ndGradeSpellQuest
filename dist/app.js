@@ -5,15 +5,19 @@ import {
   buildCodexReportUrl,
   buildProblemPrompt,
   createDayStages,
+  createThursdayReteachStages,
   formatSpellSparks,
   isCorrectSpelling,
   normalizeSpelling,
+  parseSpokenLetters,
   selectPreferredVoice,
+  sentenceUsesWord,
   shuffledLetters,
   spellingPrompt,
 } from "./engine.js";
+import { CURRENT_WEEK } from "./curriculum.js";
 
-const HISTORY_KEY = "spellcraft-history-v1";
+const HISTORY_KEY = "spellquest-history-v2";
 const SOUND_KEY = "spellcraft-sound-v1";
 const app = document.querySelector("#app");
 const homeButton = document.querySelector("#home-button");
@@ -42,10 +46,10 @@ if ("speechSynthesis" in window) {
 }
 
 const dayDetails = {
-  monday: { eyebrow: "Begin here", summary: "Learn and test five words", icon: "☾" },
-  tuesday: { eyebrow: "Remember + learn", summary: "Test five, then learn five", icon: "✦" },
-  wednesday: { eyebrow: "Build your memory", summary: "Test ten, then learn five", icon: "✧" },
-  thursday: { eyebrow: "Strengthen", summary: "Reteach Wednesday's missed words", icon: "★" },
+  monday: { eyebrow: "Learn", summary: "Learn and check four red words", icon: "☾" },
+  tuesday: { eyebrow: "Use the words", summary: "Spell each word and write a sentence", icon: "✦" },
+  wednesday: { eyebrow: "Use them again", summary: "Spell each word and write a new sentence", icon: "✧" },
+  thursday: { eyebrow: "Remember", summary: "Delayed spelling check and targeted practice", icon: "★" },
 };
 
 homeButton.addEventListener("click", () => {
@@ -111,7 +115,7 @@ function updateSoundButton() {
 function createCurrentProblemReport() {
   return buildProblemPrompt({
     details: problemDetails.value,
-    screen: app.querySelector("h1")?.textContent?.trim() || "SpellCraft",
+    screen: app.querySelector("h1")?.textContent?.trim() || "2nd Grade SpellQuest",
     pageUrl: window.location.href,
     userAgent: navigator.userAgent,
     reportedAt: new Date().toISOString(),
@@ -154,9 +158,9 @@ function renderHome() {
   app.innerHTML = `
     <section class="home-shell">
       <div class="hero-copy">
-        <p class="eyebrow">A little practice. Lasting recall.</p>
+        <p class="eyebrow">Week of ${escapeHtml(CURRENT_WEEK.label)} · Four red words</p>
         <h1>Choose your day</h1>
-        <p class="lede">Build each word step by step, then check what you remember.</p>
+        <p class="lede">Learn to spell <strong>${CURRENT_WEEK.spellingTargets.map(escapeHtml).join(", ")}</strong>, then use each word in your own sentences.</p>
       </div>
 
       <div class="day-grid" aria-label="Choose a day">
@@ -195,7 +199,7 @@ function renderHome() {
   });
 
   app.querySelector("#clear-progress")?.addEventListener("click", () => {
-    if (window.confirm("Clear every saved SpellCraft score on this device?")) {
+    if (window.confirm("Clear every saved SpellQuest score on this device?")) {
       localStorage.removeItem(HISTORY_KEY);
       renderHome();
     }
@@ -214,48 +218,27 @@ function renderStageIntro() {
   const stage = currentStage();
   if (!stage) return renderDayComplete();
 
-  if (stage.type === "needs-wednesday") {
-    app.innerHTML = messageScreen({
-      symbol: "☾",
-      eyebrow: "Thursday review",
-      title: "Wednesday comes first",
-      body: "Complete both Wednesday word checks so SpellCraft knows which words need more practice.",
-      action: "Choose another day",
-    });
-    app.querySelector("#primary-action").addEventListener("click", renderHome);
-    focusMain();
-    return;
-  }
-
-  if (stage.type === "mastery") {
-    app.innerHTML = messageScreen({
-      symbol: "★",
-      eyebrow: "Thursday review",
-      title: "Every word was remembered",
-      body: "You spelled all fifteen words correctly on Wednesday. There are no words to reteach today.",
-      action: "See my progress",
-    });
-    app.querySelector("#primary-action").addEventListener("click", renderHome);
-    focusMain();
-    return;
-  }
-
   const isTeaching = stage.type === "teaching";
+  const isSentencePractice = stage.type === "sentence-practice";
   const description = isTeaching
     ? `${stage.words.length} ${stage.words.length === 1 ? "word" : "words"} will move through five learning steps with memory checks woven in.`
-    : `${stage.words.length} ${stage.words.length === 1 ? "word" : "words"}. Type every answer first; you will check your work only at the end.`;
+    : isSentencePractice
+      ? `First spell each of the four red words. Then use each word in a sentence of your own.`
+      : `${stage.words.length} ${stage.words.length === 1 ? "word" : "words"}. Type every answer first; you will check your work only at the end.`;
+  const activityLabel = isTeaching ? "Teaching" : isSentencePractice ? "Spelling + sentences" : "No-feedback test";
+  const actionLabel = isTeaching ? "Begin teaching" : isSentencePractice ? "Begin practice" : "Start word check";
 
   app.innerHTML = `
     <section class="center-shell">
       ${renderDayProgress()}
       <article class="book-card intro-card">
-        <div class="orb" aria-hidden="true">${isTeaching ? "✦" : "✓"}</div>
-        <p class="eyebrow">${capitalize(session.day)} · ${isTeaching ? "Teaching" : "No-feedback test"}</p>
+        <div class="orb" aria-hidden="true">${isTeaching ? "✦" : isSentencePractice ? "✎" : "✓"}</div>
+        <p class="eyebrow">${capitalize(session.day)} · ${activityLabel}</p>
         <h1>${escapeHtml(stage.title)}</h1>
         <p class="lede compact">${description}</p>
-        ${isTeaching ? renderWordPreview(stage.words) : '<p class="promise"><span aria-hidden="true">◌</span> Answers stay private until the whole test is finished.</p>'}
+        ${isTeaching || isSentencePractice ? renderWordPreview(stage.words) : '<p class="promise"><span aria-hidden="true">◌</span> Answers stay private until the whole test is finished.</p>'}
         <button class="primary-button" id="primary-action" type="button">
-          ${isTeaching ? "Begin teaching" : "Start word check"} <span aria-hidden="true">→</span>
+          ${actionLabel} <span aria-hidden="true">→</span>
         </button>
       </article>
     </section>
@@ -263,6 +246,7 @@ function renderStageIntro() {
 
   app.querySelector("#primary-action").addEventListener("click", () => {
     if (isTeaching) startTeaching(stage);
+    else if (isSentencePractice) startSentencePractice(stage);
     else startTest(stage);
   });
   focusMain();
@@ -285,6 +269,7 @@ function loadTeachingTask() {
   }
   session.currentTask = stage.runtimeTasks[session.taskIndex];
   session.voiceFallback = false;
+  session.voiceStatus = "";
   session.announceTask = true;
   session.previewComplete = session.currentTask.level !== 2;
   prepareLetters();
@@ -314,7 +299,10 @@ function renderTeachingTask() {
 
   const isTileLevel = task.level <= 4;
   const voiceSupported = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition);
-  if (task.level === 4 && !voiceSupported) session.voiceFallback = true;
+  if (task.level === 4 && !voiceSupported) {
+    session.voiceFallback = true;
+    session.voiceStatus ||= "Voice spelling is not supported in this browser. Letter tiles are ready instead.";
+  }
 
   app.innerHTML = `
     <section class="center-shell lesson-shell">
@@ -383,6 +371,11 @@ function renderTileActivity(task, voiceSupported) {
   }).join("");
 
   const canClick = task.level !== 4 || session.voiceFallback;
+  const voiceStatus =
+    session.voiceStatus ||
+    (session.voiceFallback
+      ? "Letter tiles are ready. You can try the microphone again at any time."
+      : "Tap the microphone, then say each letter in order, like A, I, R.");
   const available = session.letterTiles
     .map(
       (tile) => `
@@ -403,10 +396,15 @@ function renderTileActivity(task, voiceSupported) {
           <div class="voice-controls">
             <button class="mic-button" id="mic-button" type="button" ${voiceSupported ? "" : "disabled"}>
               <span aria-hidden="true">🎙</span>
-              <span>${voiceSupported ? "Speak letters" : "Voice unavailable"}</span>
+              <span>${voiceSupported ? (session.voiceFallback ? "Try microphone again" : "Speak letters") : "Voice unavailable"}</span>
             </button>
-            <p id="heard-text">${session.voiceFallback ? "Keyboard fallback is on." : "Tap the microphone, then spell the word aloud."}</p>
-            ${voiceSupported ? '<button class="text-button" id="voice-fallback" type="button">Use keyboard instead</button>' : ""}
+            <p id="heard-text">${escapeHtml(voiceStatus)}</p>
+            ${voiceSupported && !session.voiceFallback ? '<button class="text-button" id="voice-fallback" type="button">Use letter tiles instead</button>' : ""}
+            ${
+              window.location.protocol === "file:"
+                ? '<p class="voice-environment-note"><strong>Microphone note:</strong> File previews can block speech recognition. Open SpellQuest from an HTTPS address or through the local server for reliable microphone access.</p>'
+                : ""
+            }
           </div>
         `
         : ""
@@ -440,9 +438,10 @@ function bindTileActivity(task, voiceSupported) {
   });
   app.querySelector("#voice-fallback")?.addEventListener("click", () => {
     session.voiceFallback = true;
+    session.voiceStatus = "Letter tiles are ready. You can try the microphone again at any time.";
     renderTeachingTask();
   });
-  if (task.level === 4 && voiceSupported && !session.voiceFallback) {
+  if (task.level === 4 && voiceSupported) {
     app.querySelector("#mic-button")?.addEventListener("click", startVoiceLetters);
   }
 }
@@ -616,6 +615,111 @@ function renderCorrection(firstError) {
   focusMain();
 }
 
+function startSentencePractice(stage) {
+  session.sentencePractice = {
+    stage,
+    index: 0,
+    step: "spell",
+    responses: [],
+  };
+  renderSentencePractice();
+}
+
+function renderSentencePractice(feedback = "") {
+  stopActivity();
+  const practice = session.sentencePractice;
+  const { stage, index, step } = practice;
+  if (index >= stage.words.length) {
+    renderSentencePracticeComplete();
+    return;
+  }
+
+  const word = stage.words[index];
+  const isSpelling = step === "spell";
+  app.innerHTML = `
+    <section class="center-shell lesson-shell">
+      ${renderTestProgress(index, stage.words.length, `${capitalize(session.day)} practice`)}
+      <article class="book-card lesson-card sentence-practice-card">
+        <p class="eyebrow">Word ${index + 1} of ${stage.words.length} · ${isSpelling ? "Spell" : "Write"}</p>
+        <h1>${isSpelling ? `Spell <span class="target-word">${escapeHtml(word)}</span>.` : `Use <span class="target-word">${escapeHtml(word)}</span> in a sentence.`}</h1>
+        <p class="instruction">
+          ${
+            isSpelling
+              ? "Look at the red word, then type it carefully."
+              : "Write a sentence of your own. Make sure the red word appears in it."
+          }
+        </p>
+        ${isSpelling ? renderListenButtons(word, false) : ""}
+        <form class="typing-form sentence-form" id="sentence-practice-form" autocomplete="off">
+          <label for="sentence-practice-input">${isSpelling ? "Type the word" : "Your sentence"}</label>
+          ${
+            isSpelling
+              ? '<input id="sentence-practice-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required />'
+              : '<textarea id="sentence-practice-input" rows="4" maxlength="240" spellcheck="true" required></textarea>'
+          }
+          <button class="primary-button" type="submit">
+            ${isSpelling ? "Next: write a sentence" : index === stage.words.length - 1 ? "Finish practice" : "Next word"}
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+        <p class="feedback-line visible" id="sentence-feedback" aria-live="assertive">${escapeHtml(feedback)}</p>
+      </article>
+    </section>
+  `;
+
+  if (isSpelling) bindListenButtons(word, false);
+  const input = app.querySelector("#sentence-practice-input");
+  app.querySelector("#sentence-practice-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const answer = input.value.trim();
+    if (!answer) return;
+
+    if (isSpelling) {
+      if (!isCorrectSpelling(answer, word)) {
+        app.querySelector("#sentence-feedback").textContent = `Try again. Copy the word carefully: ${word}.`;
+        input.select();
+        return;
+      }
+      practice.spelling = answer;
+      practice.step = "sentence";
+      renderSentencePractice();
+      return;
+    }
+
+    if (!sentenceUsesWord(answer, word)) {
+      app.querySelector("#sentence-feedback").textContent = `Use the word ${word} somewhere in your sentence.`;
+      input.focus();
+      return;
+    }
+
+    practice.responses.push({ word, spelling: practice.spelling, sentence: answer });
+    practice.index += 1;
+    practice.step = "spell";
+    practice.spelling = "";
+    playSpellSparkSound();
+    renderSentencePractice();
+  });
+  if (isSpelling) bindLetterEcho(input);
+  window.setTimeout(() => {
+    if (isSpelling) speakWord(word);
+    input.focus();
+  }, 250);
+  focusMain();
+}
+
+function renderSentencePracticeComplete() {
+  app.innerHTML = messageScreen({
+    symbol: "✎",
+    eyebrow: `${capitalize(session.day)} practice complete`,
+    title: "Four words, four sentences",
+    body: "You spelled every red word and used each one in a sentence.",
+    action: `Finish ${capitalize(session.day)}`,
+  });
+  addSparkles();
+  app.querySelector("#primary-action").addEventListener("click", advanceStage);
+  focusMain();
+}
+
 function startTest(stage) {
   session.test = { stage, index: 0, responses: [], selfScoreIndex: 0 };
   renderTestWord();
@@ -736,6 +840,9 @@ function finishTest() {
   };
   const history = [...getHistory(), entry];
   saveHistory(history);
+  if (stage.id === "thursday-delayed" && missedWords.length) {
+    session.stages.splice(session.stageIndex + 1, 0, ...createThursdayReteachStages(missedWords));
+  }
   renderTestResult(entry, history);
 }
 
@@ -775,16 +882,23 @@ function advanceStage() {
   session.taskIndex = 0;
   session.currentTask = null;
   session.test = null;
+  session.sentencePractice = null;
   renderStageIntro();
 }
 
 function renderDayComplete() {
   const day = session.day;
+  const completionMessages = {
+    monday: "You learned all four red words and completed a spelling check.",
+    tuesday: "You spelled all four red words and used each one in a sentence.",
+    wednesday: "You practiced all four words again in new sentences.",
+    thursday: "You completed the delayed spelling check and practiced any word that needed help.",
+  };
   app.innerHTML = messageScreen({
     symbol: "✦",
     eyebrow: `${capitalize(day)} complete`,
     title: "Your spellbook is stronger",
-    body: day === "wednesday" ? "Wednesday’s missed words are ready for Thursday’s targeted practice." : "Your results have been added to the progress graph on this device.",
+    body: completionMessages[day],
     action: "Return to days",
   });
   addSparkles();
@@ -925,58 +1039,89 @@ function levelInstruction(level, fallback) {
 function startVoiceLetters() {
   stopRecognition();
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) return;
+  if (!Recognition) {
+    session.voiceFallback = true;
+    session.voiceStatus = "Voice spelling is not supported in this browser. Letter tiles are ready instead.";
+    renderTeachingTask();
+    return;
+  }
+  session.voiceFallback = false;
   recognition = new Recognition();
   recognition.lang = "en-US";
   recognition.interimResults = false;
   recognition.continuous = false;
+  recognition.maxAlternatives = 5;
+  const activeRecognition = recognition;
   const button = app.querySelector("#mic-button");
   const heard = app.querySelector("#heard-text");
   if (button) button.classList.add("listening");
-  if (heard) heard.textContent = "Listening… say the letters in order.";
+  if (heard) heard.textContent = "Listening… say each letter in order, like A, I, R.";
+
+  recognition.onstart = () => {
+    if (heard) heard.textContent = "Listening… say each letter in order, like A, I, R.";
+  };
 
   recognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript;
-    const letters = parseSpokenLetters(transcript, session.currentTask.word);
-    if (heard) heard.textContent = `I heard: “${transcript}”`;
+    const alternatives = Array.from(event.results[0], (result) => result.transcript);
+    const target = normalizeSpelling(session.currentTask.word);
+    const best =
+      alternatives
+        .map((transcript) => ({ transcript, letters: parseSpokenLetters(transcript, session.currentTask.word) }))
+        .find(({ letters }) => letters.join("") === target) ??
+      { transcript: alternatives[0] ?? "", letters: parseSpokenLetters(alternatives[0] ?? "", session.currentTask.word) };
+    const { transcript, letters } = best;
     const movedLetters = letters.filter(addSpokenLetter);
-    window.setTimeout(() => {
-      renderTeachingTask();
-      speakLetterSequence(movedLetters);
-    }, 550);
+    session.voiceStatus = movedLetters.length
+      ? `I heard: “${transcript}”. ${session.builtTileIds.length === target.length ? "All letters are in place." : "Keep going."}`
+      : `I heard: “${transcript}”. Try saying one letter at a time.`;
+    renderTeachingTask();
+    speakLetterSequence(movedLetters);
   };
-  recognition.onerror = () => {
-    if (heard) heard.textContent = "I didn’t catch that. Tap the microphone and try again.";
-    if (button) button.classList.remove("listening");
+
+  recognition.onnomatch = () => {
+    session.voiceStatus = "I heard your voice but could not match the letters. Try saying one letter at a time.";
+    renderTeachingTask();
   };
-  recognition.onend = () => button?.classList.remove("listening");
-  recognition.start();
+
+  recognition.onerror = (event) => {
+    if (event.error === "aborted") return;
+    const blockingError = ["not-allowed", "service-not-allowed", "audio-capture"].includes(event.error);
+    session.voiceFallback = blockingError;
+    session.voiceStatus = speechRecognitionErrorMessage(event.error);
+    renderTeachingTask();
+  };
+  recognition.onend = () => {
+    button?.classList.remove("listening");
+    if (recognition === activeRecognition) recognition = null;
+  };
+  try {
+    recognition.start();
+  } catch {
+    session.voiceFallback = true;
+    session.voiceStatus = "The microphone could not start. Letter tiles are ready while you check browser microphone permission.";
+    renderTeachingTask();
+  }
 }
 
-function parseSpokenLetters(transcript, word) {
-  const clean = transcript.toLocaleLowerCase("en-US").trim();
-  if (normalizeSpelling(clean) === normalizeSpelling(word)) return [...normalizeSpelling(word)];
-  const names = {
-    a: "a", ay: "a", b: "b", bee: "b", be: "b", c: "c", see: "c", sea: "c",
-    d: "d", dee: "d", e: "e", f: "f", ef: "f", g: "g", gee: "g", h: "h", aitch: "h",
-    i: "i", eye: "i", j: "j", jay: "j", k: "k", kay: "k", l: "l", el: "l", m: "m", em: "m",
-    n: "n", en: "n", o: "o", oh: "o", p: "p", pea: "p", q: "q", cue: "q", r: "r", are: "r",
-    s: "s", ess: "s", t: "t", tea: "t", u: "u", you: "u", v: "v", vee: "v", w: "w",
-    x: "x", ex: "x", y: "y", why: "y", z: "z", zee: "z", zed: "z",
-  };
-  const tokens = clean.replace(/[^a-z\s-]/g, " ").split(/[\s-]+/).filter(Boolean);
-  const result = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    if (tokens[index] === "double" && names[tokens[index + 1]]) {
-      result.push(names[tokens[index + 1]], names[tokens[index + 1]]);
-      index += 1;
-    } else if (names[tokens[index]]) {
-      result.push(names[tokens[index]]);
-    } else if (tokens[index].length === 1) {
-      result.push(tokens[index]);
-    }
+function speechRecognitionErrorMessage(error) {
+  if (error === "not-allowed" || error === "service-not-allowed") {
+    return window.location.protocol === "file:"
+      ? "This file preview cannot use speech recognition reliably. Open SpellQuest from an HTTPS address or through the local server. Letter tiles are ready for now."
+      : "Microphone access is blocked. Allow microphone access for this site, then try again. Letter tiles are ready for now.";
   }
-  return result;
+  if (error === "audio-capture") {
+    return "No working microphone was found. Check the microphone connection and browser input setting, then try again.";
+  }
+  if (error === "network") {
+    return "Speech recognition could not reach its service. Check the internet connection and try again.";
+  }
+  if (error === "no-speech") {
+    return "I did not hear any letters. Move closer to the microphone and try again.";
+  }
+  if (error === "language-not-supported") {
+    return "English speech recognition is unavailable in this browser. Letter tiles are ready instead.";
+  }
+  return "Voice spelling stopped unexpectedly. Try the microphone again or use the letter tiles.";
 }
 
 function addSpokenLetter(letter) {
