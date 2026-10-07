@@ -1,4 +1,5 @@
 .DS_Store
 *.log
 .sites/
+.wrangler/
 spellcraft-site.tar.gz
