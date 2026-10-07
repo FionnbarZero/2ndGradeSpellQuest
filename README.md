@@ -40,4 +40,4 @@ The app has no runtime dependencies. Voice input uses the browser's Speech Recog
 
 Every screen includes a **Report a problem** button. It prepares a privacy-conscious diagnostic prompt and opens a new repository-aware Codex chat using the documented `codex://` deep-link scheme. The reporter reviews and sends the message; reports are never submitted silently. A clipboard fallback is included for devices without the Codex desktop app.
 
-Audio prompts begin with “Spell [word],” and each letter is spoken as the learner places a tile or types. On computer keyboards, Enter submits typed spelling and advances eligible instruction, feedback, and result screens.
+Audio prompts begin with “Spell [word],” and each lowercase letter is spoken as the learner places a tile or types. The app prefers Chrome's Google US English voice when it is available and otherwise chooses a natural English voice installed on the device. On computer keyboards, Enter submits typed spelling and advances eligible instruction, feedback, and result screens.

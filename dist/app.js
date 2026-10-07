@@ -7,6 +7,7 @@ import {
   createDayStages,
   isCorrectSpelling,
   normalizeSpelling,
+  selectPreferredVoice,
   shuffledLetters,
   spellingPrompt,
 } from "./engine.js";
@@ -26,6 +27,17 @@ let session = null;
 let activeTimer = null;
 let recognition = null;
 let muted = localStorage.getItem(SOUND_KEY) === "muted";
+let preferredVoice = null;
+
+function refreshPreferredVoice() {
+  if (!("speechSynthesis" in window)) return;
+  preferredVoice = selectPreferredVoice(window.speechSynthesis.getVoices());
+}
+
+if ("speechSynthesis" in window) {
+  refreshPreferredVoice();
+  window.speechSynthesis.addEventListener("voiceschanged", refreshPreferredVoice);
+}
 
 const dayDetails = {
   monday: { eyebrow: "Begin here", summary: "Learn and test five words", icon: "☾" },
@@ -915,29 +927,31 @@ function addSpokenLetter(letter) {
 }
 
 function speakWord(word) {
-  speak(spellingPrompt(word), 0.78);
+  speak(spellingPrompt(word), 0.9);
 }
 
 function speakSentence(word) {
   const detail = WORD_DETAILS[word];
-  if (detail) speak(detail.sentence, 0.82);
+  if (detail) speak(detail.sentence, 0.92);
 }
 
-function speak(text, rate = 0.82) {
+function speak(text, rate = 0.9) {
   if (muted || !("speechSynthesis" in window)) return;
   window.speechSynthesis.cancel();
   queueSpeech(text, rate);
 }
 
 function speakLetterSequence(letters) {
-  for (const letter of letters) queueSpeech(letter.toUpperCase(), 0.72);
+  for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), 0.82);
 }
 
-function queueSpeech(text, rate = 0.82) {
+function queueSpeech(text, rate = 0.9) {
   if (muted || !("speechSynthesis" in window)) return;
   const utterance = new SpeechSynthesisUtterance(text);
+  if (preferredVoice) utterance.voice = preferredVoice;
+  utterance.lang = preferredVoice?.lang || "en-US";
   utterance.rate = rate;
-  utterance.pitch = 1.02;
+  utterance.pitch = 1;
   window.speechSynthesis.speak(utterance);
 }
 

@@ -9,6 +9,7 @@ import {
   createDayStages,
   isCorrectSpelling,
   normalizeSpelling,
+  selectPreferredVoice,
   spellingPrompt,
 } from "../dist/engine.js";
 
@@ -21,6 +22,17 @@ test("normalizes case and accidental spaces", () => {
 test("uses the requested spoken spelling prompt", () => {
   assert.equal(spellingPrompt("compromise"), "Spell compromise");
   assert.equal(spellingPrompt("Constitution"), "Spell Constitution");
+});
+
+test("prefers Google US English and uses a natural English fallback", () => {
+  const voices = [
+    { name: "Daniel", lang: "en-GB" },
+    { name: "Samantha", lang: "en-US" },
+    { name: "Google US English", lang: "en-US" },
+  ];
+  assert.equal(selectPreferredVoice(voices), voices[2]);
+  assert.equal(selectPreferredVoice(voices.slice(0, 2)), voices[1]);
+  assert.equal(selectPreferredVoice([]), null);
 });
 
 test("builds the agreed five-word interleaving sequence", () => {

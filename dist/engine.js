@@ -100,6 +100,27 @@ export function spellingPrompt(word) {
   return `Spell ${String(word ?? "").trim()}`;
 }
 
+export function selectPreferredVoice(voices = []) {
+  const available = Array.from(voices);
+  const name = (voice) => String(voice?.name ?? "").toLocaleLowerCase("en-US");
+  const language = (voice) => String(voice?.lang ?? "").toLocaleLowerCase("en-US");
+  const find = (predicate) => available.find(predicate);
+
+  return (
+    find((voice) => name(voice) === "google us english") ??
+    find((voice) => name(voice).includes("google") && language(voice).startsWith("en-us")) ??
+    find((voice) => name(voice).includes("google") && language(voice).startsWith("en")) ??
+    find(
+      (voice) =>
+        language(voice).startsWith("en-us") &&
+        /(natural|samantha|ava|allison|aria|jenny)/i.test(String(voice?.name ?? "")),
+    ) ??
+    find((voice) => language(voice).startsWith("en-us")) ??
+    find((voice) => language(voice).startsWith("en")) ??
+    null
+  );
+}
+
 export function buildTeachingSequence(words) {
   const sequence = [];
   words.forEach((word, index) => {
