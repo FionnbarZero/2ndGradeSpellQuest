@@ -26,6 +26,23 @@
       </div>
     </header>
 
+    <details class="voice-settings">
+      <summary>Voice settings</summary>
+      <div class="voice-controls">
+        <label for="voice-choice">Reading voice</label>
+        <select id="voice-choice"><option value="">Automatic (best available)</option></select>
+        <label for="voice-rate">Reading speed</label>
+        <select id="voice-rate">
+          <option value="0.85">A little slower</option>
+          <option value="1" selected>Natural speed</option>
+          <option value="1.1">A little faster</option>
+        </select>
+        <button class="secondary-button" id="voice-preview" type="button">Preview voice</button>
+      </div>
+      <p id="voice-status" class="help-copy" role="status"></p>
+      <p class="help-copy">Prompts start automatically with Sound on. Preview and Hear the word also work with Sound off.</p>
+    </details>
+    <p id="storage-status" class="system-notice" role="status" hidden></p>
     <main id="app" tabindex="-1"></main>
 
     <dialog class="problem-dialog" id="problem-dialog" aria-labelledby="problem-dialog-title">

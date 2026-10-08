@@ -1,4 +1,5 @@
 export const CURRENT_WEEK = {
+  id: "2026-10-05",
   label: "October 5–9",
   source: {
     title: "26-27 G2 Weekly Focus",

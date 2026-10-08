@@ -4,6 +4,7 @@ import {
   WORD_DETAILS,
   buildCodexReportUrl,
   buildProblemPrompt,
+  buildTeachingSequence,
   createDayStages,
   createThursdayReteachStages,
   formatSpellSparks,
@@ -19,6 +20,17 @@ import { CURRENT_WEEK } from "./curriculum.js";
 
 const HISTORY_KEY = "spellquest-history-v2";
 const SOUND_KEY = "spellcraft-sound-v1";
+const VOICE_KEY = "spellquest-voice-v1";
+const RATE_KEY = "spellquest-speech-rate-v1";
+const CHECKPOINT_KEY = "spellquest-session-v1";
+const storageStatus = document.querySelector("#storage-status");
+const storageWarnings = new Set();
+let memoryHistory = [];
+let damagedHistory = null;
+let historyUnavailable = false;
+let checkpoint = null;
+let checkpointRejected = false;
+let temporarySaveAvailable = true;
 const app = document.querySelector("#app");
 const homeButton = document.querySelector("#home-button");
 const soundButton = document.querySelector("#sound-button");
@@ -31,20 +43,67 @@ const reportStatus = document.querySelector("#report-status");
 let session = null;
 let activeTimer = null;
 let recognition = null;
-let muted = localStorage.getItem(SOUND_KEY) === "muted";
+let muted = readStorage("local", SOUND_KEY) === "muted";
 let preferredVoice = null;
+let selectedVoice = readStorage("local", VOICE_KEY) || "";
+let speechRate = Number(readStorage("local", RATE_KEY));
+if (![0.85, 1, 1.1].includes(speechRate)) speechRate = 1;
 let magicAudioContext = null;
 const pendingPrompts = new Set();
+// Keep utterances alive until completion so browser speech callbacks remain reliable.
+const activeUtterances = new Set();
+let speechGeneration = 0;
+let screenGeneration = 0;
+let narrationFailed = false;
+
+window.addEventListener("beforeunload", event => {
+  if ((session && session.view !== "complete" || checkpoint) && !temporarySaveAvailable) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
 
 function refreshPreferredVoice() {
-  if (!("speechSynthesis" in window)) return;
-  preferredVoice = selectPreferredVoice(window.speechSynthesis.getVoices());
+  let voices = [];
+  try { voices = Array.from(window.speechSynthesis?.getVoices() || []).filter(voice => /^en(?:[-_]|$)/i.test(voice.lang)); } catch { /* Voice lists may load later. */ }
+  const chosen = voices.find(voice => voiceKey(voice) === selectedVoice);
+  preferredVoice = chosen || selectPreferredVoice(voices);
+  const select = document.querySelector("#voice-choice");
+  select.innerHTML = `<option value="">Automatic (best available)</option>${voices.map(voice => `<option value="${escapeHtml(voiceKey(voice))}">${escapeHtml(voice.name)} · ${escapeHtml(voice.lang)}</option>`).join("")}`;
+  select.value = chosen ? selectedVoice : "";
+  select.disabled = !voices.length;
+  document.querySelector("#voice-rate").value = String(speechRate);
+  document.querySelector("#voice-preview").disabled = !("speechSynthesis" in window);
+  document.querySelector("#voice-status").textContent = !("speechSynthesis" in window)
+    ? "Speech is unavailable in this browser. Use Adult help in the lesson."
+    : `${selectedVoice && !chosen ? "Your saved voice is unavailable here. " : ""}${preferredVoice ? `Using ${preferredVoice.name}.` : "Using the browser’s default voice while voices load."} Voice quality depends on your browser and installed voices.`;
 }
 
+function voiceKey(voice) { return `${voice.voiceURI || voice.name}|${voice.lang}`; }
+
+refreshPreferredVoice();
 if ("speechSynthesis" in window) {
-  refreshPreferredVoice();
   window.speechSynthesis.addEventListener("voiceschanged", refreshPreferredVoice);
 }
+document.querySelector("#voice-choice").addEventListener("change", event => {
+  selectedVoice = event.target.value;
+  writeStorage("local", VOICE_KEY, selectedVoice);
+  stopSpeech();
+  refreshPreferredVoice();
+});
+document.querySelector("#voice-rate").addEventListener("change", event => {
+  const rate = Number(event.target.value);
+  if (![0.85, 1, 1.1].includes(rate)) return;
+  speechRate = rate;
+  writeStorage("local", RATE_KEY, String(rate));
+  stopSpeech();
+});
+document.querySelector("#voice-preview").addEventListener("click", () => {
+  // Preview must not count as successfully hearing a test word.
+  stopRecognition(true);
+  stopSpeech();
+  queueSpeech("Hello! Let’s practice spelling together.", speechRate, true);
+});
 
 const dayDetails = {
   monday: { eyebrow: "Learn", summary: "Learn and check four red words", icon: "☾" },
@@ -54,6 +113,8 @@ const dayDetails = {
 };
 
 homeButton.addEventListener("click", () => {
+  if (session && session.view !== "complete" && !window.confirm("Leave this lesson? You can resume in this tab while it stays open. If temporary storage is unavailable, refreshing will lose unfinished work.")) return;
+  saveCheckpoint();
   stopActivity();
   session = null;
   renderHome();
@@ -61,17 +122,23 @@ homeButton.addEventListener("click", () => {
 
 soundButton.addEventListener("click", () => {
   muted = !muted;
-  localStorage.setItem(SOUND_KEY, muted ? "muted" : "on");
+  writeStorage("local", SOUND_KEY, muted ? "muted" : "on");
   updateSoundButton();
   if (muted) {
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    stopSpeech();
     if (magicAudioContext) void magicAudioContext.close();
     magicAudioContext = null;
+  } else if (!problemDialog.open && !recognition) {
+    const word = session?.view === "teaching" ? session.currentTask?.word
+      : session?.view === "test" ? session.test.stage.words[session.test.index]
+      : session?.view === "sentence" && session.sentencePractice.step === "spell"
+        ? session.sentencePractice.stage.words[session.sentencePractice.index] : null;
+    if (word) speakWord(word);
   }
 });
 
 reportButton.addEventListener("click", () => {
-  stopRecognition();
+  stopRecognition(true);
   stopSpeech();
   reportStatus.textContent = "";
   problemDialog.showModal();
@@ -143,20 +210,213 @@ async function copyText(text) {
 }
 
 function getHistory() {
+  if (historyUnavailable || damagedHistory !== null) return memoryHistory;
+  const raw = readStorage("local", HISTORY_KEY);
+  if (raw === null) return memoryHistory;
   try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    const entries = JSON.parse(raw);
+    if (!Array.isArray(entries)) throw new Error("Invalid history");
+    memoryHistory = entries.filter(validHistoryEntry);
+    if (memoryHistory.length !== entries.length) throw new Error("Invalid entry");
   } catch {
-    return [];
+    damagedHistory = raw;
+    warnStorage("Some saved progress could not be read. The original data will be preserved before saving new results.");
   }
+  return memoryHistory;
 }
 
 function saveHistory(history) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  memoryHistory = history;
+  // Access can recover during a lesson. Re-read before every write so earlier
+  // scores that were temporarily inaccessible are never replaced by memory-only results.
+  let raw;
+  try { raw = localStorage.getItem(HISTORY_KEY); }
+  catch {
+    historyUnavailable = true;
+    warnStorage("Progress could not be saved safely because earlier scores cannot be read. Keep this page open; new results remain here only.");
+    return;
+  }
+  let existing = [];
+  let damagedCurrent = false;
+  if (raw !== null) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) throw new Error("Invalid history");
+      existing = parsed.filter(validHistoryEntry);
+      damagedCurrent = existing.length !== parsed.length;
+    } catch { damagedCurrent = true; }
+  }
+  // Never overwrite a damaged record unless an exact recovery copy was saved.
+  if (damagedHistory !== null) {
+    if (!writeStorage("local", `${HISTORY_KEY}-recovery-${Date.now()}`, damagedHistory)) return;
+    damagedHistory = null;
+  }
+  if (damagedCurrent && !writeStorage("local", `${HISTORY_KEY}-recovery-current-${Date.now()}`, raw)) return;
+  const merged = new Map(existing.map(entry => [entry.id, entry]));
+  history.forEach(entry => merged.set(entry.id, entry));
+  memoryHistory = [...merged.values()];
+  historyUnavailable = !writeStorage("local", HISTORY_KEY, JSON.stringify(memoryHistory));
+}
+
+function validHistoryEntry(entry) {
+  if (!entry || typeof entry !== "object" || !["monday", "tuesday", "wednesday", "thursday"].includes(entry.day)) return false;
+  if (typeof entry.id !== "string" || typeof entry.completedAt !== "string" || !Number.isFinite(Date.parse(entry.completedAt))) return false;
+  if (entry.kind === "practice") return ["tuesday", "wednesday"].includes(entry.day) && typeof entry.weekId === "string";
+  return Number.isInteger(entry.total) && entry.total > 0 && Number.isInteger(entry.score) && entry.score >= 0 && entry.score <= entry.total &&
+    Number.isFinite(entry.percent) && entry.percent >= 0 && entry.percent <= 100;
+}
+
+function warnStorage(message) {
+  storageWarnings.add(message);
+  storageStatus.hidden = false;
+  storageStatus.textContent = [...storageWarnings].join(" ");
+}
+
+function readStorage(kind, key) {
+  try { return (kind === "local" ? localStorage : sessionStorage).getItem(key); }
+  catch {
+    if (kind === "local") historyUnavailable = true;
+    warnStorage(kind === "local" ? "Saved progress is unavailable. You can still play; new results may last only until this page closes." : "Temporary saving is unavailable. Keep this page open; refreshing may lose unfinished work.");
+    return null;
+  }
+}
+
+function writeStorage(kind, key, value) {
+  try {
+    const storage = kind === "local" ? localStorage : sessionStorage;
+    if (value === null) storage.removeItem(key);
+    else storage.setItem(key, value);
+    if (kind === "session") temporarySaveAvailable = true;
+    return true;
+  } catch {
+    if (kind === "session") temporarySaveAvailable = false;
+    warnStorage(kind === "local" ? "Progress could not be saved on this device. You can keep playing; new results remain in this page only." : "Temporary saving is unavailable. Keep this page open; refreshing may lose unfinished work.");
+    return false;
+  }
+}
+
+function upsertHistory(entry) {
+  const history = getHistory().filter((item) => item.id !== entry.id);
+  history.push(entry);
+  saveHistory(history);
+  return memoryHistory;
+}
+
+function saveCheckpoint() {
+  if (!session || session.view === "complete") return;
+  checkpoint = JSON.parse(JSON.stringify({ version: 1, weekId: CURRENT_WEEK.id, session }));
+  writeStorage("session", CHECKPOINT_KEY, JSON.stringify(checkpoint));
+}
+
+function clearCheckpoint() {
+  checkpoint = null;
+  checkpointRejected = false;
+  writeStorage("session", CHECKPOINT_KEY, null);
+}
+
+function readCheckpoint() {
+  if (checkpointRejected) return null;
+  if (checkpoint) return checkpoint;
+  const raw = readStorage("session", CHECKPOINT_KEY);
+  if (!raw) return null;
+  try {
+    const saved = JSON.parse(raw);
+    const s = saved.session;
+    const views = ["intro", "teaching", "success", "correction", "reward", "charged", "sentence", "sentence-complete", "test", "self-score", "result"];
+    if (saved.version !== 1 || saved.weekId !== CURRENT_WEEK.id || !s || !LESSONS[s.day] || !views.includes(s.view) ||
+      !Array.isArray(s.stages) || !Number.isInteger(s.stageIndex) || s.stageIndex < 0 || s.stageIndex >= s.stages.length) throw new Error("Invalid checkpoint");
+    const knownIds = new Set(["monday", "monday-immediate", "tuesday-practice", "wednesday-practice", "thursday-delayed", "thursday-reteach", "thursday-retest", "thursday-reteach-extra", "thursday-retest-extra"]);
+    const stageIds = s.stages.map(stage => stage?.id).join(",");
+    const allowedStages = {
+      monday: ["monday,monday-immediate"], tuesday: ["tuesday-practice"], wednesday: ["wednesday-practice"],
+      thursday: ["thursday-delayed", "thursday-delayed,thursday-reteach,thursday-retest", "thursday-delayed,thursday-reteach,thursday-retest,thursday-reteach-extra,thursday-retest-extra"],
+    };
+    if (typeof s.id !== "string" || !new RegExp(`^${s.day}-\\d+$`).test(s.id) || !allowedStages[s.day].includes(stageIds)) throw new Error("Invalid lesson identity");
+    const baseStages = createDayStages(s.day);
+    for (const stage of s.stages) {
+      if (!stage || !knownIds.has(stage.id) || !["teaching", "test", "sentence-practice"].includes(stage.type) ||
+        !Array.isArray(stage.words) || !stage.words.length || stage.words.some(w => !CURRENT_WEEK.spellingTargets.includes(w))) throw new Error("Invalid stage");
+      if (new Set(stage.words).size !== stage.words.length) throw new Error("Duplicate words");
+      const definition = baseStages.find(item => item.id === stage.id) || createThursdayReteachStages(stage.words).find(item => stage.id.replace(/-extra$/, "") === item.id);
+      if (!definition || stage.type !== definition.type || stage.words.join(",") !== definition.words.join(",")) throw new Error("Invalid lesson definition");
+      stage.title = definition.title;
+      stage.testType = definition.testType;
+      // Recreate immutable lesson definitions rather than trusting a stored copy.
+      if (stage.type === "teaching") stage.tasks = buildTeachingSequence(stage.words);
+      if (stage.runtimeTasks && (!Array.isArray(stage.runtimeTasks) || stage.runtimeTasks.length !== stage.tasks?.length || stage.runtimeTasks.some((t, i) => !t || t.word !== stage.tasks[i].word || t.targetLevel !== stage.tasks[i].targetLevel || t.isReview !== stage.tasks[i].isReview || ![0,1].includes(t.errorsAtLevel) || !Number.isInteger(t.level) || t.level < 1 || t.level > t.targetLevel))) throw new Error("Invalid tasks");
+    }
+    const stage = s.stages[s.stageIndex];
+    const finiteCount = value => Number.isInteger(value) && value >= 0 && value <= 10000;
+    const validResponses = responses => Array.isArray(responses) && responses.length <= stage.words.length && responses.every((r, i) => r && r.word === stage.words[i] && typeof r.answer === "string" && r.answer.trim().length > 0 && r.answer.length <= 80);
+    if (!finiteCount(s.taskIndex)) throw new Error("Invalid task index");
+    if (["teaching", "correction", "success", "reward", "charged"].includes(s.view)) {
+      if (stage.type !== "teaching" || !Array.isArray(stage.runtimeTasks) || s.taskIndex > stage.runtimeTasks.length || !finiteCount(stage.sparksCollected) || !finiteCount(stage.sparksUsed)) throw new Error("Invalid teaching state");
+      if (["reward", "charged"].includes(s.view) && s.taskIndex !== stage.runtimeTasks.length) throw new Error("Incomplete teaching");
+      if (["teaching", "correction"].includes(s.view) && (!stage.runtimeTasks[s.taskIndex] || !Array.isArray(s.letterTiles) || s.letterTiles.some(t => !/^\d+-[a-z]$/.test(t.id) || !/^[a-z]$/.test(t.letter)) || !Array.isArray(s.builtTileIds) || s.builtTileIds.some(id => !s.letterTiles.some(t => t.id === id)))) throw new Error("Invalid tiles");
+      if (["teaching", "correction"].includes(s.view) && (s.letterTiles.map(t=>t.letter).sort().join("") !== [...stage.runtimeTasks[s.taskIndex].word].sort().join("") || new Set(s.letterTiles.map(t=>t.id)).size !== s.letterTiles.length || new Set(s.builtTileIds).size !== s.builtTileIds.length || s.letterTiles.some(t=>t.used !== s.builtTileIds.includes(t.id)))) throw new Error("Inconsistent tiles");
+    }
+    if (["test", "self-score", "result"].includes(s.view)) {
+      if (stage.type !== "test" || !s.test || !validResponses(s.test.responses) || !finiteCount(s.test.index) || s.test.index !== s.test.responses.length || s.test.index > stage.words.length || !finiteCount(s.test.selfScoreIndex) || s.test.selfScoreIndex > s.test.responses.length) throw new Error("Invalid test state");
+      if (["self-score", "result"].includes(s.view) && s.test.index !== stage.words.length) throw new Error("Incomplete test");
+      if (s.view === "result" && (!validHistoryEntry(s.result) || s.result.kind === "practice" || !validResponses(s.result.responses) || !Array.isArray(s.result.missedWords) || s.result.missedWords.some(w => !stage.words.includes(w)))) throw new Error("Invalid result");
+      if (s.view === "result") {
+        const correct = s.test.responses.filter(r=>isCorrectSpelling(r.answer,r.word)).length;
+        const missed = s.test.responses.filter(r=>!isCorrectSpelling(r.answer,r.word)).map(r=>r.word);
+        if (s.result.total !== stage.words.length || s.result.score !== correct || s.result.percent !== Math.round(correct / stage.words.length * 100) || s.result.testId !== stage.id || s.result.day !== s.day || s.result.weekId !== CURRENT_WEEK.id || JSON.stringify(s.result.responses) !== JSON.stringify(s.test.responses) || s.result.missedWords.join(",") !== missed.join(",")) throw new Error("Inconsistent result");
+      }
+    }
+    if (["sentence", "sentence-complete"].includes(s.view)) {
+      const p = s.sentencePractice;
+      if (stage.type !== "sentence-practice" || !p || !finiteCount(p.index) || p.index > stage.words.length || !["spell", "sentence"].includes(p.step) || !Array.isArray(p.responses) || p.responses.length !== p.index || p.responses.some((r, i) => !r || r.word !== stage.words[i] || !isCorrectSpelling(r.spelling, r.word) || typeof r.sentence !== "string" || r.sentence.length > 240 || sentenceFeedback(r.sentence,r.word))) throw new Error("Invalid practice");
+      if (s.view === "sentence-complete" && p.index !== stage.words.length) throw new Error("Incomplete practice");
+      if (s.view === "sentence" && p.step === "sentence" && !isCorrectSpelling(p.spelling,stage.words[p.index])) throw new Error("Missing spelling");
+    }
+    checkpoint = saved;
+  } catch {
+    checkpointRejected = true;
+    warnStorage("The interrupted lesson could not be restored. Your saved scores are unchanged; start a day again.");
+    return null;
+  }
+  return checkpoint;
+}
+
+function resumeLesson() {
+  const saved = readCheckpoint();
+  if (!saved) return;
+  try {
+    session = saved.session;
+    const stage = currentStage();
+    if (session.test) session.test.stage = stage;
+    if (session.sentencePractice) session.sentencePractice.stage = stage;
+    session.currentTask = stage.runtimeTasks?.[session.taskIndex] ?? null;
+    switch (session.view) {
+      case "intro": return renderStageIntro();
+      case "teaching": case "correction":
+        session.previewComplete = session.currentTask.level !== 2;
+        session.announceTask = true;
+        return renderTeachingTask();
+      case "success": return loadTeachingTask();
+      case "reward": return renderSparkReward();
+      case "charged": return renderSparkReward(true);
+      case "sentence": return renderSentencePractice();
+      case "sentence-complete": return renderSentencePracticeComplete();
+      case "test": return renderTestWord();
+      case "self-score": return renderSelfScoring();
+      case "result": return renderTestResult(session.result, getHistory());
+    }
+  } catch {
+    session = null;
+    checkpoint = null;
+    checkpointRejected = true;
+    warnStorage("The interrupted lesson could not be restored. Your saved scores are unchanged; start a day again.");
+    renderHome();
+  }
 }
 
 function renderHome() {
   stopActivity();
   const history = getHistory();
+  const saved = readCheckpoint();
   app.innerHTML = `
     <section class="home-shell">
       <div class="hero-copy">
@@ -164,6 +424,9 @@ function renderHome() {
         <h1>Choose your day</h1>
         <p class="lede">Learn to spell <strong>${CURRENT_WEEK.spellingTargets.map(escapeHtml).join(", ")}</strong>, then use each word in your own sentences.</p>
       </div>
+
+      ${saved ? `<section class="resume-card"><p>You have an unfinished ${capitalize(saved.session.day)} lesson in this tab.</p><button class="primary-button" id="resume-lesson" type="button">Resume lesson</button><p class="help-copy">Drafts stay in this tab temporarily. Finish before closing it.</p></section>` : ""}
+      <p class="help-copy">This word list is updated by an adult, not automatically from the class slides. Week of ${escapeHtml(CURRENT_WEEK.label)}.</p>
 
       <div class="day-grid" aria-label="Choose a day">
         ${Object.entries(dayDetails)
@@ -175,6 +438,7 @@ function renderHome() {
                   <small>${detail.eyebrow}</small>
                   <strong>${capitalize(day)}</strong>
                   <span>${detail.summary}</span>
+                  ${history.some(entry => entry.weekId === CURRENT_WEEK.id && entry.day === day && entry.kind === "practice") ? '<small>Practice completed · see review status below</small>' : ""}
                 </span>
                 <span class="day-arrow" aria-hidden="true">→</span>
               </button>
@@ -199,10 +463,14 @@ function renderHome() {
   app.querySelectorAll("[data-day]").forEach((button) => {
     button.addEventListener("click", () => startDay(button.dataset.day));
   });
+  app.querySelector("#resume-lesson")?.addEventListener("click", resumeLesson);
 
   app.querySelector("#clear-progress")?.addEventListener("click", () => {
     if (window.confirm("Clear every saved SpellQuest score on this device?")) {
-      localStorage.removeItem(HISTORY_KEY);
+      if (!writeStorage("local", HISTORY_KEY, null)) return;
+      memoryHistory = [];
+      damagedHistory = null;
+      historyUnavailable = false;
       renderHome();
     }
   });
@@ -210,6 +478,8 @@ function renderHome() {
 }
 
 function startDay(day) {
+  if (readCheckpoint() && !window.confirm("Start a new lesson instead? This replaces the unfinished lesson in this tab. Saved scores stay unchanged.")) return;
+  clearCheckpoint();
   const stages = createDayStages(day, getHistory());
   session = { id: `${day}-${Date.now()}`, day, stages, stageIndex: 0, taskIndex: 0, currentTask: null };
   renderStageIntro();
@@ -219,6 +489,7 @@ function renderStageIntro() {
   stopActivity();
   const stage = currentStage();
   if (!stage) return renderDayComplete();
+  session.view = "intro";
 
   const isTeaching = stage.type === "teaching";
   const isSentencePractice = stage.type === "sentence-practice";
@@ -270,6 +541,8 @@ function loadTeachingTask() {
     return;
   }
   session.currentTask = stage.runtimeTasks[session.taskIndex];
+  session.adultPromptReady = false;
+  session.draft = "";
   session.voiceFallback = false;
   session.voiceStatus = "";
   session.announceTask = true;
@@ -288,8 +561,9 @@ function prepareLetters() {
   session.builtTileIds = [];
 }
 
-function renderTeachingTask() {
+function renderTeachingTask(preserveFocus = false) {
   stopActivity();
+  session.view = "teaching";
   const task = session.currentTask;
   if (task.level === 2 && !session.previewComplete) {
     renderMemoryPreview();
@@ -327,11 +601,13 @@ function renderTeachingTask() {
   bindListenButtons(task.word);
   if (isTileLevel) bindTileActivity(task, voiceSupported);
   else bindTypingActivity();
-  focusMain();
-  if (shouldAnnounce && !muted) schedulePrompt(() => speakWord(task.word), 350);
+  if (preserveFocus) saveCheckpoint();
+  else focusMain(isTileLevel ? app : app.querySelector("#spelling-input"));
+  if (shouldAnnounce) speakWord(task.word);
 }
 
 function renderMemoryPreview() {
+  session.view = "teaching";
   let seconds = 5;
   app.innerHTML = `
     <section class="center-shell lesson-shell">
@@ -359,6 +635,7 @@ function renderMemoryPreview() {
     if (countdown) countdown.textContent = String(Math.max(0, seconds));
     if (seconds <= 0) finish();
   }, 1000);
+  speakWord(session.currentTask.word);
   focusMain();
 }
 
@@ -401,7 +678,8 @@ function renderTileActivity(task, voiceSupported) {
               <span aria-hidden="true">🎙</span>
               <span>${voiceSupported ? (session.voiceFallback ? "Try microphone again" : "Say word or letters") : "Voice unavailable"}</span>
             </button>
-            <p id="heard-text">${escapeHtml(voiceStatus)}</p>
+            <p id="heard-text" role="status">${escapeHtml(voiceStatus)}</p>
+            <p class="help-copy">Ask an adult before using the microphone. Your browser may send your voice to its speech-recognition provider. SpellQuest does not save recordings. You can always choose letter tiles.</p>
             ${voiceSupported && !session.voiceFallback ? '<button class="text-button" id="voice-fallback" type="button">Use letter tiles instead</button>' : ""}
             ${
               window.location.protocol === "file:"
@@ -423,14 +701,16 @@ function bindTileActivity(task, voiceSupported) {
     button.addEventListener("click", () => {
       const letter = session.letterTiles.find((tile) => tile.id === button.dataset.addTile)?.letter;
       addTile(button.dataset.addTile);
-      renderTeachingTask();
+      renderTeachingTask(true);
+      focusTile();
       if (letter) speakLetterSequence([letter]);
     });
   });
   app.querySelectorAll("[data-remove-tile]").forEach((button) => {
     button.addEventListener("click", () => {
       removeTile(button.dataset.removeTile);
-      renderTeachingTask();
+      renderTeachingTask(true);
+      focusTile(button.dataset.removeTile);
     });
   });
   app.querySelector("#check-answer")?.addEventListener("click", () => {
@@ -449,11 +729,23 @@ function bindTileActivity(task, voiceSupported) {
   }
 }
 
+function focusTile(preferredId) {
+  const generation = screenGeneration;
+  window.setTimeout(() => {
+    if (generation !== screenGeneration || problemDialog.open) return;
+    const preferred = preferredId && [...app.querySelectorAll("[data-add-tile]")].find(button => button.dataset.addTile === preferredId && !button.disabled);
+    const target = preferred || app.querySelector("[data-add-tile]:not(:disabled)") || app.querySelector("#check-answer");
+    target?.focus({ preventScroll: true });
+    const built = session.builtTileIds.map(id => session.letterTiles.find(tile => tile.id === id)?.letter).join(" ");
+    app.querySelector("#activity-status").textContent = built ? `Your letters: ${built}.` : "Your answer is empty.";
+  }, 0);
+}
+
 function renderTypingActivity() {
   return `
     <form class="typing-form" id="typing-form" autocomplete="off">
       <label for="spelling-input">Type the word you hear</label>
-      <input id="spelling-input" name="spelling" type="text" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+      <input id="spelling-input" name="spelling" type="text" inputmode="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="80" value="${escapeHtml(session.draft || "")}" required />
       <button class="primary-button" type="submit">Check my spelling</button>
     </form>
   `;
@@ -467,7 +759,7 @@ function bindTypingActivity() {
     if (input.value.trim()) checkTeachingAnswer(input.value);
   });
   bindLetterEcho(input);
-  window.setTimeout(() => input.focus(), 50);
+  input.addEventListener("input", () => { session.draft = input.value; saveCheckpoint(); });
 }
 
 function bindLetterEcho(input) {
@@ -494,7 +786,12 @@ function removeTile(id) {
 }
 
 function checkTeachingAnswer(answer) {
+  if (session.currentTask.level >= 3 && narrationFailed && !session.adultPromptReady) {
+    showNarrationFailure();
+    return;
+  }
   stopActivity();
+  session.draft = "";
   const task = session.currentTask;
   if (isCorrectSpelling(answer, task.word)) {
     playSpellSparkSound();
@@ -517,6 +814,7 @@ function checkTeachingAnswer(answer) {
 }
 
 function renderSuccess(isClimbingBack) {
+  session.view = "success";
   const task = session.currentTask;
   app.innerHTML = `
     <section class="center-shell">
@@ -550,6 +848,7 @@ function renderSuccess(isClimbingBack) {
 
 function renderSparkReward(charged = false) {
   stopActivity();
+  session.view = charged ? "charged" : "reward";
   const stage = currentStage();
   const sparkCount = charged ? stage.sparksUsed : stage.sparksCollected;
   const sparkLabel = formatSpellSparks(sparkCount);
@@ -591,6 +890,7 @@ function renderSparkReward(charged = false) {
 }
 
 function renderCorrection(firstError) {
+  session.view = "correction";
   const task = session.currentTask;
   let seconds = 4;
   app.innerHTML = `
@@ -631,6 +931,7 @@ function startSentencePractice(stage) {
 
 function renderSentencePractice(feedback = "") {
   stopActivity();
+  session.view = "sentence";
   const practice = session.sentencePractice;
   const { stage, index, step } = practice;
   if (index >= stage.words.length) {
@@ -650,7 +951,7 @@ function renderSentencePractice(feedback = "") {
           ${
             isSpelling
               ? "Look at the red word, then type it carefully."
-              : "Write a complete thought using the red word and other words. End with a period, question mark, or exclamation point."
+              : "Try to write a complete thought. End with punctuation. The game checks the red word and ending punctuation, not grammar or meaning. An adult can review your sentences at the end."
           }
         </p>
         ${isSpelling ? renderListenButtons(word, false) : ""}
@@ -658,8 +959,8 @@ function renderSentencePractice(feedback = "") {
           <label for="sentence-practice-input">${isSpelling ? "Type the word" : "Your sentence"}</label>
           ${
             isSpelling
-              ? '<input id="sentence-practice-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required />'
-              : '<textarea id="sentence-practice-input" rows="4" maxlength="240" spellcheck="true" required></textarea>'
+              ? `<input id="sentence-practice-input" type="text" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false" value="${escapeHtml(practice.draft || "")}" required />`
+              : `<textarea id="sentence-practice-input" rows="4" maxlength="240" spellcheck="true" required>${escapeHtml(practice.draft || "")}</textarea>`
           }
           <button class="primary-button" type="submit">
             ${isSpelling ? "Next: write a sentence" : index === stage.words.length - 1 ? "Finish practice" : "Next word"}
@@ -673,6 +974,7 @@ function renderSentencePractice(feedback = "") {
 
   if (isSpelling) bindListenButtons(word, false);
   const input = app.querySelector("#sentence-practice-input");
+  input.addEventListener("input", () => { practice.draft = input.value; saveCheckpoint(); });
   app.querySelector("#sentence-practice-form").addEventListener("submit", (event) => {
     event.preventDefault();
     const answer = input.value.trim();
@@ -685,6 +987,7 @@ function renderSentencePractice(feedback = "") {
         return;
       }
       practice.spelling = answer;
+      practice.draft = "";
       practice.step = "sentence";
       renderSentencePractice();
       return;
@@ -701,28 +1004,47 @@ function renderSentencePractice(feedback = "") {
     practice.index += 1;
     practice.step = "spell";
     practice.spelling = "";
+    practice.draft = "";
     playSpellSparkSound();
     renderSentencePractice();
   });
   if (isSpelling) bindLetterEcho(input);
-  schedulePrompt(() => {
-    if (isSpelling) speakWord(word);
-    input.focus();
-  }, 250);
-  focusMain();
+  // Queue within the action that opens the word, retaining browser user activation.
+  if (isSpelling) speakWord(word);
+  focusMain(input);
 }
 
 function renderSentencePracticeComplete() {
+  session.view = "sentence-complete";
+  const practice = session.sentencePractice;
+  savePracticeCompletion();
   app.innerHTML = messageScreen({
     symbol: "✎",
     eyebrow: `${capitalize(session.day)} practice complete`,
     title: "Four words, four sentences",
-    body: "You spelled every red word and used each one in a sentence.",
+    body: "You finished the word and punctuation checks. Grammar and meaning have not been checked by the game.",
     action: `Finish ${capitalize(session.day)}`,
+  });
+  app.querySelector(".book-card").insertAdjacentHTML("beforeend", `
+    <details class="adult-review"><summary>Optional: review with an adult</summary>
+      <p>Adult: read each sentence together. Does it make sense and use the red word correctly? Discuss improvements before checking the box. This is a self-reported review, not an automated assessment.</p>
+      <ul>${practice.responses.map(response => `<li><strong>${escapeHtml(response.word)}</strong>: ${escapeHtml(response.sentence)}</li>`).join("")}</ul>
+      <label><input id="adult-reviewed" type="checkbox" ${practice.adultReviewed ? "checked" : ""} /> An adult reviewed these sentences with me</label>
+    </details><p class="help-copy">Sentence text is temporary and is not included in saved progress.</p>`);
+  app.querySelector("#adult-reviewed").addEventListener("change", event => {
+    practice.adultReviewed = event.target.checked;
+    savePracticeCompletion();
+    saveCheckpoint();
   });
   addSparkles();
   app.querySelector("#primary-action").addEventListener("click", advanceStage);
   focusMain();
+}
+
+function savePracticeCompletion() {
+  upsertHistory({ id: `${session.id}-practice`, kind: "practice", day: session.day,
+    weekId: CURRENT_WEEK.id, weekLabel: CURRENT_WEEK.label, completedAt: new Date().toISOString(),
+    adultReviewed: Boolean(session.sentencePractice.adultReviewed) });
 }
 
 function startTest(stage) {
@@ -732,6 +1054,7 @@ function startTest(stage) {
 
 function renderTestWord() {
   stopActivity();
+  session.view = "test";
   const { stage, index } = session.test;
   if (index >= stage.words.length) {
     renderSelfScoring();
@@ -748,7 +1071,7 @@ function renderTestWord() {
         ${renderListenButtons(word, false)}
         <form class="typing-form" id="test-form" autocomplete="off">
           <label for="test-input">Word ${index + 1} of ${stage.words.length}</label>
-          <input id="test-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+          <input id="test-input" type="text" maxlength="80" autocomplete="off" autocapitalize="none" spellcheck="false" value="${escapeHtml(session.test.draft || "")}" required />
           <button class="primary-button" type="submit">Save and continue <span aria-hidden="true">→</span></button>
         </form>
         <p class="test-promise"><span aria-hidden="true">◌</span> No answers are marked yet.</p>
@@ -757,23 +1080,25 @@ function renderTestWord() {
   `;
   bindListenButtons(word, false);
   const input = app.querySelector("#test-input");
+  input.addEventListener("input", () => { session.test.draft = input.value; saveCheckpoint(); });
   app.querySelector("#test-form").addEventListener("submit", (event) => {
     event.preventDefault();
     if (!input.value.trim()) return;
+    if (narrationFailed && !session.test.adultPromptReady) { showNarrationFailure(); return; }
     session.test.responses.push({ word, answer: input.value.trim() });
     session.test.index += 1;
+    session.test.draft = "";
+    session.test.adultPromptReady = false;
     renderTestWord();
   });
   bindLetterEcho(input);
-  schedulePrompt(() => {
-    speakWord(word);
-    input.focus();
-  }, 300);
-  focusMain();
+  speakWord(word);
+  focusMain(input);
 }
 
 function renderSelfScoring(shake = false) {
   stopActivity();
+  session.view = "self-score";
   const test = session.test;
   if (test.selfScoreIndex >= test.responses.length) {
     finishTest();
@@ -830,7 +1155,10 @@ function finishTest() {
     .filter(({ word, answer }) => !isCorrectSpelling(answer, word))
     .map(({ word }) => word);
   const entry = {
-    id: `${Date.now()}-${stage.id}`,
+    id: `${session.id}-${stage.id}`,
+    kind: "test",
+    weekId: CURRENT_WEEK.id,
+    weekLabel: CURRENT_WEEK.label,
     sessionId: session.id,
     testId: stage.id,
     title: stage.title,
@@ -843,15 +1171,16 @@ function finishTest() {
     responses,
     missedWords,
   };
-  const history = [...getHistory(), entry];
-  saveHistory(history);
-  if (stage.id === "thursday-delayed" && missedWords.length) {
+  const history = upsertHistory(entry);
+  session.result = entry;
+  if (stage.id === "thursday-delayed" && missedWords.length && !session.stages.some(item => item.id === "thursday-reteach")) {
     session.stages.splice(session.stageIndex + 1, 0, ...createThursdayReteachStages(missedWords));
   }
   renderTestResult(entry, history);
 }
 
 function renderTestResult(entry, history) {
+  session.view = "result";
   const finalStage = session.stageIndex === session.stages.length - 1;
   app.innerHTML = `
     <section class="center-shell results-shell">
@@ -865,6 +1194,7 @@ function renderTestResult(entry, history) {
             ? `<div class="practice-list"><span>Keep practicing</span><p>${entry.missedWords.map(escapeHtml).join(" · ")}</p></div>`
             : '<div class="practice-list mastered"><span>Every word matched</span><p>Your memory work is paying off.</p></div>'
         }
+        ${entry.missedWords.length && entry.testType === "retest" ? `<p class="help-copy">These words still need practice. Finishing today does not mean they are mastered. ${entry.testId === "thursday-retest" ? "You can try one extra practice round, or ask an adult for help." : "You have finished the extra round. Ask an adult to practice these words with you; there is no endless retry loop."}</p>${entry.testId === "thursday-retest" ? '<button class="secondary-button" id="extra-practice" type="button">Try one extra practice round</button>' : ""}` : ""}
         <div class="mini-graph-wrap">
           <h2>Your progress</h2>
           ${renderGraph(history, true)}
@@ -877,6 +1207,10 @@ function renderTestResult(entry, history) {
   `;
   if (entry.percent === 100) addSparkles();
   app.querySelector("#result-action").addEventListener("click", () => {
+    advanceStage();
+  });
+  app.querySelector("#extra-practice")?.addEventListener("click", () => {
+    session.stages.splice(session.stageIndex + 1, 0, ...createThursdayReteachStages(entry.missedWords).map(stage => ({ ...stage, id: `${stage.id}-extra` })));
     advanceStage();
   });
   focusMain();
@@ -892,18 +1226,21 @@ function advanceStage() {
 }
 
 function renderDayComplete() {
+  session.view = "complete";
+  clearCheckpoint();
   const day = session.day;
+  const unresolved = unresolvedWords(getHistory());
   const completionMessages = {
     monday: "You learned all four red words and completed a spelling check.",
     tuesday: "You spelled all four red words and used each one in a sentence.",
     wednesday: "You practiced all four words again in new sentences.",
-    thursday: "You completed the delayed spelling check and practiced any word that needed help.",
+    thursday: unresolved.length ? `Practice finished. Still needs adult help: ${unresolved.join(", ")}. These words are not yet mastered.` : "You completed the delayed check. Every word matched in its latest spelling check this week.",
   };
   app.innerHTML = messageScreen({
     symbol: "✦",
     eyebrow: `${capitalize(day)} complete`,
-    title: "Your spellbook is stronger",
-    body: completionMessages[day],
+    title: day === "thursday" && unresolved.length ? "Practice finished — keep learning" : "Your spellbook is stronger",
+    body: escapeHtml(completionMessages[day]),
     action: "Return to days",
   });
   addSparkles();
@@ -953,11 +1290,18 @@ function renderTestProgress(index, total, label = "Testing") {
 }
 
 function renderListenButtons(word, includeSentence = true) {
+  if (!("speechSynthesis" in window)) narrationFailed = true;
   return `
     <div class="listen-row">
       <button class="listen-button" data-speak-word type="button"><span aria-hidden="true">🔊</span> Hear the word</button>
       ${includeSentence ? '<button class="sentence-button" data-speak-sentence type="button">Hear it in a sentence</button>' : ""}
     </div>
+    <p id="narration-status" class="help-copy" role="status" ${narrationFailed ? "" : "hidden"}>The voice is unavailable. Ask an adult to read the prompt below, or retry Hear the word. No answer will be marked just because audio failed.</p>
+    <details class="adult-prompt"><summary>Adult help if you cannot hear the word</summary>
+      <p>Adult only: keep this prompt out of the child's view and read it aloud. Do not spell the letters.</p>
+      <p>${escapeHtml(spellingPrompt(word))}. ${escapeHtml(WORD_DETAILS[word]?.sentence || "")}</p>
+      <button class="secondary-button" id="adult-prompt-read" type="button">An adult read the prompt aloud</button>
+    </details>
   `;
 }
 
@@ -966,10 +1310,29 @@ function bindListenButtons(word, includeSentence = true) {
   if (includeSentence) {
     app.querySelector("[data-speak-sentence]")?.addEventListener("click", () => speakSentence(word, true));
   }
+  app.querySelector("#adult-prompt-read")?.addEventListener("click", () => {
+    if (session?.test) session.test.adultPromptReady = true;
+    if (session) session.adultPromptReady = true;
+    const details = app.querySelector(".adult-prompt");
+    if (details) details.open = false;
+    const status = app.querySelector("#narration-status");
+    if (status) { status.hidden = false; status.textContent = "An adult has read the prompt. You can continue."; }
+    saveCheckpoint();
+  });
 }
 
 function renderWordPreview(words) {
   return `<div class="word-preview">${words.map((word) => `<span>${escapeHtml(word)}</span>`).join("")}</div>`;
+}
+
+function unresolvedWords(history) {
+  const latest = new Map();
+  history.filter(entry => entry.weekId === CURRENT_WEEK.id && entry.kind !== "practice").forEach(entry => {
+    if (Array.isArray(entry.responses)) entry.responses.forEach(response => {
+      if (CURRENT_WEEK.spellingTargets.includes(response?.word) && typeof response.answer === "string") latest.set(response.word, isCorrectSpelling(response.answer, response.word));
+    });
+  });
+  return [...latest].filter(([, correct]) => !correct).map(([word]) => word);
 }
 
 function renderGraph(history, compact = false) {
@@ -977,43 +1340,29 @@ function renderGraph(history, compact = false) {
     return `
       <div class="empty-graph">
         <div class="empty-stars" aria-hidden="true">✧ · ✦ · ✧</div>
-        <p>Your test scores will appear here.</p>
+        <p>Your completed practice and spelling checks will appear here.</p>
       </div>
     `;
   }
-  const width = compact ? 480 : 760;
-  const height = compact ? 170 : 220;
-  const padding = { left: 42, right: 18, top: 18, bottom: 34 };
-  const usableWidth = width - padding.left - padding.right;
-  const usableHeight = height - padding.top - padding.bottom;
-  const points = history.map((entry, index) => {
-    const x = padding.left + (history.length === 1 ? usableWidth / 2 : (index / (history.length - 1)) * usableWidth);
-    const y = padding.top + usableHeight - (entry.percent / 100) * usableHeight;
-    return { x, y, entry };
-  });
-  const polyline = points.map(({ x, y }) => `${x},${y}`).join(" ");
-  return `
-    <div class="graph-scroll" role="img" aria-label="Test scores: ${history.map((entry) => `${entry.percent} percent`).join(", ")}">
-      <svg class="score-graph" viewBox="0 0 ${width} ${height}" aria-hidden="true">
-        ${[0, 25, 50, 75, 100]
-          .map((score) => {
-            const y = padding.top + usableHeight - (score / 100) * usableHeight;
-            return `<line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" class="grid-line"/><text x="${padding.left - 8}" y="${y + 4}" text-anchor="end">${score}</text>`;
-          })
-          .join("")}
-        ${points.length > 1 ? `<polyline points="${polyline}" class="score-line"/>` : ""}
-        ${points
-          .map(
-            ({ x, y, entry }, index) => `
-              <circle cx="${x}" cy="${y}" r="7" class="score-dot day-dot-${entry.day}"/>
-              <text x="${x}" y="${height - 10}" text-anchor="middle">${index + 1}</text>
-            `,
-          )
-          .join("")}
-      </svg>
-    </div>
-    <div class="graph-legend"><span>Test attempt</span><strong>Latest: ${history.at(-1).score}/${history.at(-1).total} · ${history.at(-1).percent}%</strong></div>
-  `;
+  const limit = compact ? 4 : 12;
+  const sections = [
+    ["Daily practice", history.filter(entry => entry.kind === "practice")],
+    ["Full spelling checks", history.filter(entry => entry.kind !== "practice" && entry.testType !== "retest")],
+    ["Targeted retests — only previously missed words", history.filter(entry => entry.kind !== "practice" && entry.testType === "retest")],
+  ];
+  const unresolved = unresolvedWords(history);
+  return `${unresolved.length ? `<p class="needs-help" role="status">This week, still needs practice: <strong>${unresolved.map(escapeHtml).join(", ")}</strong>. Ask an adult for help.</p>` : ""}
+    <p class="help-copy">Full checks and smaller retests measure different word sets. They are shown separately, not as a single rising or falling score.</p>
+    ${sections.filter(([, entries]) => entries.length).map(([title, entries]) => `
+      <section class="history-section"><h3>${title}</h3>
+      ${entries.length > limit ? `<p>Showing the latest ${limit} of ${entries.length} records. Older records remain saved.</p>` : ""}
+      <ul class="history-list">${entries.slice(-limit).reverse().map(entry => `<li>
+        <strong>${escapeHtml(capitalize(entry.day))} · ${escapeHtml(new Date(entry.completedAt).toLocaleDateString())}</strong>
+        <span>Week: ${escapeHtml(entry.weekId || "not recorded in older score")}</span>
+        ${entry.kind === "practice" ? `<span>Practice completed · ${entry.adultReviewed === true ? "Adult review reported" : "Sentences not adult-reviewed"}</span>` : `
+          <span>${escapeHtml(entry.testType === "immediate" ? "Immediate check" : entry.testType === "delayed" ? "Delayed check" : entry.testType === "retest" ? "Targeted retest" : "Spelling check")}: ${entry.score}/${entry.total} (${entry.percent}%)</span>
+          <span>Words: ${Array.isArray(entry.responses) ? entry.responses.filter(r => typeof r?.word === "string").map(r => escapeHtml(r.word)).join(", ") || "not recorded" : "not recorded"}</span>`}
+      </li>`).join("")}</ul></section>`).join("")}`;
 }
 
 function messageScreen({ symbol, eyebrow, title, body, action }) {
@@ -1042,6 +1391,13 @@ function levelInstruction(level, fallback) {
 }
 
 function startVoiceLetters() {
+  if (recognition) {
+    stopRecognition();
+    session.voiceFallback = true;
+    session.voiceStatus = "Microphone stopped. Use the tiles or try again.";
+    renderTeachingTask();
+    return;
+  }
   stopRecognition();
   stopSpeech();
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -1052,23 +1408,37 @@ function startVoiceLetters() {
     return;
   }
   session.voiceFallback = false;
-  recognition = new Recognition();
-  recognition.lang = "en-US";
-  recognition.interimResults = false;
-  recognition.continuous = false;
-  recognition.maxAlternatives = 10;
+  try {
+    recognition = new Recognition();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 10;
+  } catch {
+    stopRecognition();
+    session.voiceFallback = true;
+    session.voiceStatus = "The microphone could not be set up. Use the letter tiles instead.";
+    renderTeachingTask();
+    return;
+  }
   const activeRecognition = recognition;
+  const activeSession = session;
+  const activeTask = session.currentTask;
+  const isCurrent = () => recognition === activeRecognition && session === activeSession && session.currentTask === activeTask;
   const button = app.querySelector("#mic-button");
   const heard = app.querySelector("#heard-text");
   if (button) button.classList.add("listening");
+  if (button) button.setAttribute("aria-label", "Stop listening");
   if (heard) heard.textContent = "Listening… say the word, or spell each letter like A, I, R.";
 
   recognition.onstart = () => {
+    if (!isCurrent()) return;
     if (heard) heard.textContent = "Listening… say the word, or spell each letter like A, I, R.";
   };
 
   recognition.onresult = (event) => {
-    const alternatives = Array.from(event.results[0], (result) => result.transcript);
+    if (!isCurrent()) return;
+    const alternatives = Array.from(event.results?.[0] || [], (result) => result.transcript);
     const match = matchSpokenSpelling(alternatives, session.currentTask.word);
     if (match) {
       session.letterTiles.forEach((tile) => {
@@ -1086,20 +1456,24 @@ function startVoiceLetters() {
   };
 
   recognition.onnomatch = () => {
+    if (!isCurrent()) return;
+    session.voiceFallback = true;
     session.voiceStatus = "I heard your voice but could not match the letters. Try saying one letter at a time.";
     renderTeachingTask();
   };
 
   recognition.onerror = (event) => {
-    if (event.error === "aborted") return;
-    const blockingError = ["not-allowed", "service-not-allowed", "audio-capture"].includes(event.error);
-    session.voiceFallback = blockingError;
+    if (!isCurrent()) return;
+    session.voiceFallback = true;
     session.voiceStatus = speechRecognitionErrorMessage(event.error);
     renderTeachingTask();
   };
   recognition.onend = () => {
-    button?.classList.remove("listening");
-    if (recognition === activeRecognition) recognition = null;
+    if (!isCurrent()) return;
+    recognition = null;
+    session.voiceFallback = true;
+    session.voiceStatus = "Listening ended without a complete result. Use the letter tiles or try the microphone again.";
+    renderTeachingTask();
   };
   try {
     recognition.start();
@@ -1141,26 +1515,27 @@ function addSpokenLetter(letter) {
 function speakWord(word, requested = false) {
   const example = WORD_DETAILS[word]?.sentence;
   const prompt = example ? `${spellingPrompt(word)}. ${example} The word is ${word}.` : `${spellingPrompt(word)}. ${word}.`;
-  speak(prompt, 0.8, requested);
+  speak(prompt, speechRate, requested);
 }
 
 function speakSentence(word, requested = false) {
   const detail = WORD_DETAILS[word];
-  if (detail) speak(detail.sentence, 0.86, requested);
+  if (detail) speak(detail.sentence, speechRate, requested);
 }
 
-function speak(text, rate = 0.9, requested = false) {
-  if ((muted && !requested) || !("speechSynthesis" in window)) return;
-  if (requested) stopRecognition();
+function speak(text, rate = speechRate, requested = false) {
+  if (muted && !requested) return;
+  if (!("speechSynthesis" in window)) { showNarrationFailure(); return; }
+  if (requested) stopRecognition(true);
   stopSpeech();
-  queueSpeech(text, rate, requested);
+  queueSpeech(text, rate, requested, true);
 }
 
 function speakLetterSequence(letters) {
-  for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), 0.76);
+  for (const letter of letters) queueSpeech(letter.toLocaleLowerCase("en-US"), speechRate);
 }
 
-function queueSpeech(text, rate = 0.9, requested = false) {
+function queueSpeech(text, rate = speechRate, requested = false, isPrompt = false) {
   if ((muted && !requested) || recognition || problemDialog.open || !("speechSynthesis" in window)) return;
   if (!preferredVoice) refreshPreferredVoice();
   const utterance = new SpeechSynthesisUtterance(text);
@@ -1169,7 +1544,64 @@ function queueSpeech(text, rate = 0.9, requested = false) {
   utterance.rate = rate;
   utterance.pitch = 1;
   utterance.volume = 1;
-  window.speechSynthesis.speak(utterance);
+  const generation = speechGeneration;
+  let startTimer = null;
+  const clearStartTimer = () => {
+    if (startTimer === null) return;
+    window.clearTimeout(startTimer);
+    pendingPrompts.delete(startTimer);
+    startTimer = null;
+  };
+  if (isPrompt) {
+    const status = app.querySelector("#narration-status");
+    if (status) { status.hidden = false; status.textContent = "Starting the spoken word automatically…"; }
+    startTimer = window.setTimeout(() => {
+      pendingPrompts.delete(startTimer);
+      startTimer = null;
+      if (generation !== speechGeneration) return;
+      showNarrationFailure();
+      const status = app.querySelector("#narration-status");
+      if (status) status.textContent = "The browser did not start the voice. Ask an adult to check device sound and open the game’s web address in Chrome or Safari, or use Adult help below. Your answer has not been marked.";
+    }, 5000);
+    pendingPrompts.add(startTimer);
+  }
+  activeUtterances.add(utterance);
+  utterance.onstart = () => {
+    clearStartTimer();
+    if (!isPrompt || generation !== speechGeneration) return;
+    const status = app.querySelector("#narration-status");
+    if (status) { status.hidden = false; status.textContent = "Listen to the word. You can replay it with Hear the word."; }
+  };
+  utterance.onerror = (event) => {
+    clearStartTimer();
+    activeUtterances.delete(utterance);
+    if (isPrompt && generation === speechGeneration && !["canceled", "interrupted"].includes(event.error)) showNarrationFailure();
+  };
+  utterance.onend = () => {
+    clearStartTimer();
+    activeUtterances.delete(utterance);
+    if (!isPrompt || generation !== speechGeneration) return;
+    narrationFailed = false;
+    const status = app.querySelector("#narration-status");
+    if (status) { status.hidden = false; status.textContent = "The prompt has finished playing. Tap Hear the word to hear it again."; }
+  };
+  try {
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    window.speechSynthesis.speak(utterance);
+  } catch {
+    clearStartTimer();
+    activeUtterances.delete(utterance);
+    if (isPrompt) showNarrationFailure();
+  }
+}
+
+function showNarrationFailure() {
+  narrationFailed = true;
+  const status = app.querySelector("#narration-status");
+  if (status) {
+    status.hidden = false;
+    status.textContent = "The voice is unavailable. Retry Hear the word or ask an adult to open Adult help below and read the prompt. Your answer has not been marked.";
+  }
 }
 
 function playSpellSparkSound() {
@@ -1221,6 +1653,7 @@ function playSpellSparkSound() {
 }
 
 function stopActivity() {
+  screenGeneration += 1;
   stopTimer();
   stopRecognition();
   stopSpeech();
@@ -1235,6 +1668,8 @@ function schedulePrompt(callback, delay) {
 }
 
 function stopSpeech() {
+  activeUtterances.clear();
+  speechGeneration += 1;
   pendingPrompts.forEach((timer) => window.clearTimeout(timer));
   pendingPrompts.clear();
   if ("speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -1245,14 +1680,21 @@ function stopTimer() {
   activeTimer = null;
 }
 
-function stopRecognition() {
+function stopRecognition(recoverControls = false) {
   if (!recognition) return;
+  const previous = recognition;
+  recognition = null;
+  previous.onstart = previous.onresult = previous.onnomatch = previous.onerror = previous.onend = null;
   try {
-    recognition.abort();
+    previous.abort();
   } catch {
     // The recognizer may already be stopped.
   }
-  recognition = null;
+  if (recoverControls && session?.view === "teaching" && session.currentTask?.level === 4) {
+    session.voiceFallback = true;
+    session.voiceStatus = "Microphone stopped. Use the letter tiles or try again.";
+    renderTeachingTask();
+  }
 }
 
 function currentStage() {
@@ -1289,9 +1731,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function focusMain() {
-  window.scrollTo({ top: 0, behavior: "smooth" });
-  window.setTimeout(() => app.focus({ preventScroll: true }), 0);
+function focusMain(target = app) {
+  saveCheckpoint();
+  const generation = screenGeneration;
+  window.scrollTo({ top: 0, behavior: "auto" });
+  window.setTimeout(() => { if (generation === screenGeneration && !problemDialog.open) target.focus({ preventScroll: true }); }, 0);
 }
 
 updateSoundButton();

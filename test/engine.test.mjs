@@ -28,8 +28,8 @@ test("normalizes case and accidental spaces", () => {
 });
 
 test("uses the requested spoken spelling prompt", () => {
-  assert.equal(spellingPrompt("air"), "Spell air");
-  assert.equal(spellingPrompt("Here"), "Spell Here");
+  assert.equal(spellingPrompt("air"), "Write the word air");
+  assert.equal(spellingPrompt("Here"), "Write the word Here");
 });
 
 test("accepts a whole word or individually spoken letter names", () => {
@@ -107,6 +107,13 @@ test("uses a premium US system voice when Google is unavailable", () => {
     { name: "Ava (Premium)", lang: "en-US" },
   ];
   assert.equal(selectPreferredVoice(voices), voices[1]);
+});
+
+test("prefers enhanced and neural voices over a standard system voice", () => {
+  for (const name of ["Samantha (Enhanced)", "Jenny Natural", "English Neural"]) {
+    const voices = [{ name: "Samantha", lang: "en-US" }, { name, lang: "en-US" }];
+    assert.equal(selectPreferredVoice(voices), voices[1]);
+  }
 });
 
 test("builds the agreed five-word interleaving sequence", () => {
