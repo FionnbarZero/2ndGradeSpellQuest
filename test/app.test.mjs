@@ -118,7 +118,7 @@ test("resuming a learning screen automatically reads its word again", () => {
   const r = fixture({ temporary: f.temporary });
   r.run('resumeLesson();');
   assert.equal(r.speech.spoken.length, 1);
-  assert.match(r.speech.spoken[0], /^Write the word air\./);
+  assert.equal(r.speech.spoken[0], "Spell air. The cool air felt fresh on my face.");
 });
 
 test("turning Sound on reads the current learning word without a Hear click", () => {
@@ -148,7 +148,7 @@ test("a browser that silently fails to start speech reports failure instead of p
 test("memory preview reads the word immediately and a stale start timeout cannot affect another screen", () => {
   const f = fixture({ silentSpeech: true });
   f.run('startDay("monday"); startTeaching(currentStage()); session.currentTask.level = 2; session.previewComplete = false; renderTeachingTask();');
-  assert.match(f.speech.spoken.at(-1), /^Write the word air\./);
+  assert.match(f.speech.spoken.at(-1), /^Spell air\./);
   f.run('stopActivity();');
   f.flushTimeouts();
   assert.equal(f.run("narrationFailed"), false);
@@ -160,7 +160,7 @@ test("practice opens every spelling prompt immediately without pressing Hear the
     f.run(`startDay("${day}");`);
     f.node("#primary-action").events.click();
     for (const word of CURRENT_WEEK.spellingTargets) {
-      assert.match(f.speech.spoken.at(-1), new RegExp(`^Write the word ${word}\\.`));
+      assert.match(f.speech.spoken.at(-1), new RegExp(`^Spell ${word}\\.`));
       const count = f.speech.spoken.length;
       f.flushTimeouts();
       assert.equal(f.speech.spoken.length, count, "no delayed duplicate prompt");
@@ -179,7 +179,7 @@ test("every test question speaks in its opening action, with no delayed duplicat
   f.run('startDay("thursday");');
   f.node("#primary-action").events.click();
   for (const word of CURRENT_WEEK.spellingTargets) {
-    assert.match(f.speech.spoken.at(-1), new RegExp(`^Write the word ${word}\\.`));
+    assert.match(f.speech.spoken.at(-1), new RegExp(`^Spell ${word}\\.`));
     const count = f.speech.spoken.length;
     f.flushTimeouts();
     assert.equal(f.speech.spoken.length, count);

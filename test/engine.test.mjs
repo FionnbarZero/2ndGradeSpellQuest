@@ -28,8 +28,8 @@ test("normalizes case and accidental spaces", () => {
 });
 
 test("uses the requested spoken spelling prompt", () => {
-  assert.equal(spellingPrompt("air"), "Write the word air");
-  assert.equal(spellingPrompt("Here"), "Write the word Here");
+  assert.equal(spellingPrompt("air"), "Spell air");
+  assert.equal(spellingPrompt("Here"), "Spell Here");
 });
 
 test("accepts a whole word or individually spoken letter names", () => {

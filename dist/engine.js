@@ -70,7 +70,7 @@ export function sentenceUsesWord(sentence, word) {
 }
 
 export function spellingPrompt(word) {
-  return `Write the word ${String(word ?? "").trim()}`;
+  return `Spell ${String(word ?? "").trim()}`;
 }
 
 export function sentenceFeedback(sentence, word) {

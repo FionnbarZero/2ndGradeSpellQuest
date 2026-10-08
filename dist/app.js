@@ -1514,7 +1514,7 @@ function addSpokenLetter(letter) {
 
 function speakWord(word, requested = false) {
   const example = WORD_DETAILS[word]?.sentence;
-  const prompt = example ? `${spellingPrompt(word)}. ${example} The word is ${word}.` : `${spellingPrompt(word)}. ${word}.`;
+  const prompt = example ? `${spellingPrompt(word)}. ${example}` : `${spellingPrompt(word)}.`;
   speak(prompt, speechRate, requested);
 }
 
